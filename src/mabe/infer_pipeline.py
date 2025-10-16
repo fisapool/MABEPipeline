@@ -247,16 +247,26 @@ def generate_predictions(cfg: Dict, test_df: pd.DataFrame, tracking_data: Dict, 
     
     for model_name, predictions in model_predictions.items():
         logger.info(f"Converting {model_name} probabilities to predictions...")
+        logger.info(f"Predictions shape: {predictions.shape}")
+        logger.info(f"Number of prediction data points: {len(test_dataset.predictions_data)}")
         
         # Get predicted classes
         predicted_classes = np.argmax(predictions, axis=1)
         predicted_proba = np.max(predictions, axis=1)
         
+        # Debug: Log some statistics
+        logger.info(f"Max probability: {np.max(predicted_proba):.4f}")
+        logger.info(f"Min probability: {np.min(predicted_proba):.4f}")
+        logger.info(f"Mean probability: {np.mean(predicted_proba):.4f}")
+        logger.info(f"Confidence threshold: {confidence_threshold}")
+        
         # Filter by confidence threshold
         confident_mask = predicted_proba >= confidence_threshold
+        confident_count = np.sum(confident_mask)
+        logger.info(f"Confident predictions: {confident_count}/{len(predicted_proba)}")
         
         # Create prediction dictionaries
-        for i, (video_id, frame, agent_id, target_id) in enumerate(test_dataset.predictions_data):
+        for i, pred_data in enumerate(test_dataset.predictions_data):
             if i < len(predicted_classes) and confident_mask[i]:
                 behavior_map = {
                     0: 'approach', 1: 'attack', 2: 'avoid', 3: 'chase',
@@ -267,10 +277,10 @@ def generate_predictions(cfg: Dict, test_df: pd.DataFrame, tracking_data: Dict, 
                 confidence = predicted_proba[i]
                 
                 all_predictions.append({
-                    'video_id': video_id,
-                    'frame': frame,
-                    'agent_id': agent_id,
-                    'target_id': target_id,
+                    'video_id': pred_data['video_id'],
+                    'frame': pred_data['frame'],
+                    'agent_id': pred_data['agent_id'],
+                    'target_id': pred_data['target_id'],
                     'behavior_name': behavior_name,
                     'confidence': confidence,
                     'model': model_name

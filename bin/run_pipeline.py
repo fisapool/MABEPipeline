@@ -123,7 +123,8 @@ def run_preprocess_command(args, cfg: dict) -> int:
     try:
         from mabe.preprocessing import preprocess_data
         
-        max_videos = args.max_videos or cfg.get('training', {}).get('max_videos', 5)
+        # Handle max_videos attribute - check if it exists in args
+        max_videos = getattr(args, 'max_videos', None) or cfg.get('training', {}).get('max_videos', 5)
         logger.info(f"Processing up to {max_videos} videos")
         
         # Run preprocessing
@@ -143,11 +144,15 @@ def run_train_command(args, cfg: dict) -> int:
     logger.info("Starting model training...")
     
     try:
+        # Handle resume and checkpoint attributes - check if they exist in args
+        resume = getattr(args, 'resume', False)
+        checkpoint_path = getattr(args, 'checkpoint', None)
+        
         # Run training
         results = run_training(
             cfg=cfg,
-            resume=args.resume,
-            checkpoint_path=args.checkpoint
+            resume=resume,
+            checkpoint_path=checkpoint_path
         )
         
         logger.info("Training completed successfully")
@@ -189,15 +194,20 @@ def run_infer_command(args, cfg: dict) -> int:
     logger.info("Starting inference...")
     
     try:
+        # Handle inference attributes - check if they exist in args
+        confidence = getattr(args, 'confidence', None)
+        test_csv = getattr(args, 'test_csv', None)
+        output_path = getattr(args, 'output', None)
+        
         # Override config with command line arguments
-        if args.confidence:
-            cfg['inference']['confidence_threshold'] = args.confidence
+        if confidence:
+            cfg['inference']['confidence_threshold'] = confidence
         
         # Run inference
         submission_df = run_inference(
             cfg=cfg,
-            test_csv=args.test_csv,
-            output_path=args.output
+            test_csv=test_csv,
+            output_path=output_path
         )
         
         logger.info(f"Inference completed: {len(submission_df)} predictions generated")

@@ -47,7 +47,7 @@ class TestMouseBehaviorDataset(Dataset):
         self.predictions_data = self.generate_annotation_aware_predictions()
         
     def generate_annotation_aware_predictions(self):
-        """Generate F-Score compliant predictions - ONLY for annotated interactions"""
+        """Generate predictions for test data - create predictions for all possible mouse interactions"""
         predictions_data = []
         
         for _, video_row in self.test_df.iterrows():
@@ -56,23 +56,26 @@ class TestMouseBehaviorDataset(Dataset):
             duration_sec = video_row['video_duration_sec']
             total_frames = int(fps * duration_sec)
             
-            # Get annotated interactions for this video (F-Score compliance)
-            video_annotations = self.annotation_maps.get(video_id, {})
+            # For test data, we need to generate predictions for all possible mouse interactions
+            # since we don't have annotations. We'll use a standard approach.
+            logger.info(f"Generating predictions for test video {video_id} ({total_frames} frames)")
             
-            if not video_annotations:
-                logger.warning(f"No annotation data for {video_id} - using training patterns as template")
-                # Use training patterns as template for test videos
-                video_annotations = self.training_patterns
+            # Get available mouse IDs from tracking data
+            available_mice = self.get_available_mice(video_id)
             
-            # Only generate predictions for interactions that were actually annotated
-            for (agent_id, target_id), annotated_behaviors in video_annotations.items():
-                if not annotated_behaviors:
-                    continue
+            if not available_mice:
+                logger.warning(f"No mouse tracking data found for {video_id}")
+                # Create default mouse pair
+                available_mice = [('mouse1', 'mouse2')]
+            
+            # Generate predictions for all mouse pairs
+            for agent_id, target_id in available_mice:
+                if agent_id == target_id:
+                    continue  # Skip self-interactions
                     
-                logger.info(f"Generating predictions for {video_id}: {agent_id}->{target_id} "
-                          f"(behaviors: {annotated_behaviors})")
+                logger.info(f"Generating predictions for {video_id}: {agent_id}->{target_id}")
                 
-                # Use sliding window approach for annotated interactions only
+                # Use sliding window approach for all interactions
                 window_size = 30  # frames
                 step_size = 10    # frames (less overlap for faster processing)
                 
@@ -87,11 +90,52 @@ class TestMouseBehaviorDataset(Dataset):
                         'end_frame': end_frame,
                         'agent_id': agent_id,
                         'target_id': target_id,
-                        'annotated_behaviors': annotated_behaviors  # Track what was annotated
+                        'annotated_behaviors': []  # No annotations for test data
                     })
         
-        logger.info(f"Generated {len(predictions_data)} F-Score compliant predictions")
+        logger.info(f"Generated {len(predictions_data)} test predictions")
+        
+        # If no predictions were generated, create a minimal prediction to avoid empty dataset
+        if not predictions_data:
+            logger.warning("No predictions generated - creating minimal prediction to avoid empty dataset")
+            # Create a single dummy prediction to prevent empty dataset issues
+            if not self.test_df.empty:
+                video_id = self.test_df.iloc[0]['video_id']
+                predictions_data.append({
+                    'video_id': video_id,
+                    'frame': 0,
+                    'start_frame': 0,
+                    'end_frame': 1,
+                    'agent_id': 'mouse1',
+                    'target_id': 'mouse2',
+                    'annotated_behaviors': []  # No annotations for test data
+                })
+        
         return predictions_data
+    
+    def get_available_mice(self, video_id):
+        """Get available mouse IDs from tracking data"""
+        if video_id not in self.tracking_data:
+            return []
+        
+        tracking_df = self.tracking_data[video_id]
+        
+        # Find all mouse columns (ending with _body_center_x)
+        mouse_columns = [col for col in tracking_df.columns if col.endswith('_body_center_x')]
+        mice = []
+        
+        for col in mouse_columns:
+            mouse_id = col.split('_')[0]  # Extract mouse ID
+            mice.append(mouse_id)
+        
+        # Create all possible pairs
+        mouse_pairs = []
+        for i, mouse1 in enumerate(mice):
+            for mouse2 in mice[i+1:]:
+                mouse_pairs.append((mouse1, mouse2))
+                mouse_pairs.append((mouse2, mouse1))  # Both directions
+        
+        return mouse_pairs
     
     def __len__(self):
         return len(self.predictions_data)
@@ -397,6 +441,11 @@ def predict_single(model, data_loader, device, return_proba: bool = True) -> np.
             else:
                 _, predicted = torch.max(outputs, 1)
                 all_predictions.append(predicted.cpu().numpy())
+    
+    # Handle empty predictions case
+    if not all_predictions:
+        logger.warning("No predictions generated - returning empty array")
+        return np.array([])
     
     return np.concatenate(all_predictions, axis=0)
 
