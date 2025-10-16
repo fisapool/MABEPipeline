@@ -255,3 +255,4 @@ For issues and questions:
 1. Check the troubleshooting section above
 2. Review log files in `outputs/logs/`
 3. Create an issue with detailed error information
+# MABEPipeline
