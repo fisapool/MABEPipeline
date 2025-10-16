@@ -33,18 +33,18 @@ training:
   early_stopping_patience: 20  # More patience
   resume_checkpoint: null
   use_focal_loss: true
-  focal_gamma: 4.0  # Best from tuning: Higher gamma for more focus on hard examples
+  focal_gamma: 2.0  # Reduced for simpler training
   focal_alpha: 0.75  # Best from tuning: Alpha weighting for focal loss
   class_weight_power: 2.0  # Best from tuning: Power for class weight transformation
-  use_attention: true  # Enable attention mechanism
+  use_attention: false  # Disable complex attention, use basic CNN
   stratified_sampling: true  # Enable stratified sampling
   num_heads: 4  # Number of attention heads
-  dropout: 0.4  # Best from tuning: Dropout rate
+  dropout: 0.3  # Reduced for simpler training
   
   # SMOTE configuration
   use_smote: true
-  smote_k_neighbors: 5
-  smote_target_ratio: 0.5  # Oversample minorities to 50% of majority
+  smote_k_neighbors: 3  # Reduce from 5 for better diversity
+  smote_target_ratio: 0.3  # Less aggressive oversampling
   
   # Enhanced augmentation
   minority_class_threshold: 1000

@@ -160,30 +160,71 @@ class BehavioralSMOTE:
                                   frame: int, agent_id: str, target_id: str) -> Optional[np.ndarray]:
         """Extract 26-dimensional feature vector from tracking data"""
         if video_id not in tracking_data:
-            return None
+            logger.warning(f"SMOTE: Tracking data not available for video {video_id}")
+            # Return dummy vector to match preprocessing/inference behavior
+            return np.zeros(26, dtype=np.float32)
         
         tracking_df = tracking_data[video_id]
         
-        # Get frame data
-        if 'frame' in tracking_df.columns:
-            frame_data = tracking_df[tracking_df['frame'] == frame]
-        else:
-            if frame < len(tracking_df):
-                frame_data = tracking_df.iloc[frame:frame+1]
+        # Log tracking data info for debugging
+        logger.debug(f"SMOTE: Extracting features for video {video_id}, frame {frame}, agent {agent_id}, target {target_id}")
+        logger.debug(f"SMOTE: Tracking data shape: {tracking_df.shape}, columns: {list(tracking_df.columns)}")
+        
+        # Get frame data - handle different column names (case-insensitive)
+        try:
+            # Check for 'frame' or 'Frame' column (case-insensitive)
+            frame_col = None
+            for col in tracking_df.columns:
+                if col.lower() == 'frame':
+                    frame_col = col
+                    break
+            
+            if frame_col is not None:
+                # Handle both int and float frame values
+                frame_data = tracking_df[tracking_df[frame_col] == frame]
+                logger.debug(f"SMOTE: Using '{frame_col}' column, found {len(frame_data)} rows")
             else:
-                return None
+                if frame < len(tracking_df):
+                    frame_data = tracking_df.iloc[frame:frame+1]
+                    logger.debug(f"SMOTE: Using frame as row number, found {len(frame_data)} rows")
+                else:
+                    logger.warning(f"SMOTE: Frame {frame} not found in tracking data (max frame: {len(tracking_df)-1})")
+                    logger.warning(f"SMOTE: Available columns: {list(tracking_df.columns)}")
+                    # Return dummy vector to match preprocessing/inference behavior
+                    return np.zeros(26, dtype=np.float32)
+        except Exception as e:
+            logger.warning(f"SMOTE: Error accessing frame data for video {video_id}, frame {frame}: {e}")
+            # Return dummy vector to match preprocessing/inference behavior
+            return np.zeros(26, dtype=np.float32)
         
         if frame_data.empty:
-            return None
+            logger.warning(f"SMOTE: No data found for frame {frame} in video {video_id}")
+            # Return dummy vector to match preprocessing/inference behavior
+            return np.zeros(26, dtype=np.float32)
         
         # Extract spatial features (12 features)
-        spatial_features = self._extract_spatial_features(frame_data, agent_id, target_id)
+        try:
+            spatial_features = self._extract_spatial_features(frame_data, agent_id, target_id)
+            logger.debug(f"SMOTE: Extracted {len(spatial_features)} spatial features")
+        except Exception as e:
+            logger.warning(f"SMOTE: Error extracting spatial features: {e}")
+            spatial_features = [0.0] * 12  # Default spatial features
         
         # Extract temporal features (10 features)
-        temporal_features = self._extract_temporal_features(tracking_df, frame)
+        try:
+            temporal_features = self._extract_temporal_features(tracking_df, frame)
+            logger.debug(f"SMOTE: Extracted {len(temporal_features)} temporal features")
+        except Exception as e:
+            logger.warning(f"SMOTE: Error extracting temporal features: {e}")
+            temporal_features = [0.0] * 10  # Default temporal features
         
         # Extract interaction features (4 features)
-        interaction_features = self._extract_interaction_features(frame_data, agent_id, target_id)
+        try:
+            interaction_features = self._extract_interaction_features(frame_data, agent_id, target_id)
+            logger.debug(f"SMOTE: Extracted {len(interaction_features)} interaction features")
+        except Exception as e:
+            logger.warning(f"SMOTE: Error extracting interaction features: {e}")
+            interaction_features = [0.0] * 4  # Default interaction features
         
         # Combine all features
         all_features = spatial_features + temporal_features + interaction_features
@@ -191,8 +232,19 @@ class BehavioralSMOTE:
         # Ensure we have exactly 26 features
         if len(all_features) < 26:
             all_features.extend([0.0] * (26 - len(all_features)))
+            logger.warning(f"SMOTE: Feature vector too short ({len(all_features)}), padding with zeros")
         elif len(all_features) > 26:
             all_features = all_features[:26]
+            logger.warning(f"SMOTE: Feature vector too long ({len(all_features)}), truncating")
+        
+        # Validate feature quality
+        if all(f == 0.0 for f in all_features):
+            logger.warning(f"SMOTE: All-zero feature vector detected for video {video_id}, frame {frame}")
+            return None
+        
+        # Log feature statistics for debugging
+        non_zero_count = sum(1 for f in all_features if f != 0.0)
+        logger.debug(f"SMOTE: Feature vector: {non_zero_count}/26 non-zero values, range: [{min(all_features):.3f}, {max(all_features):.3f}]")
         
         return np.array(all_features, dtype=np.float32)
     
@@ -200,9 +252,10 @@ class BehavioralSMOTE:
         """Extract spatial features (12 features)"""
         features = []
         
-        # Agent position
-        agent_x_col = f'{agent_id}_body_center_x'
-        agent_y_col = f'{agent_id}_body_center_y'
+        # Agent position (ensure agent_id is string)
+        agent_id_str = str(agent_id)
+        agent_x_col = f'{agent_id_str}_body_center_x'
+        agent_y_col = f'{agent_id_str}_body_center_y'
         
         if agent_x_col in frame_data.columns and agent_y_col in frame_data.columns:
             agent_x = frame_data[agent_x_col].iloc[0] if not frame_data.empty else 0
@@ -211,9 +264,10 @@ class BehavioralSMOTE:
         else:
             features.extend([0.0, 0.0])
         
-        # Target position
-        target_x_col = f'{target_id}_body_center_x'
-        target_y_col = f'{target_id}_body_center_y'
+        # Target position (ensure target_id is string)
+        target_id_str = str(target_id)
+        target_x_col = f'{target_id_str}_body_center_x'
+        target_y_col = f'{target_id_str}_body_center_y'
         
         if target_x_col in frame_data.columns and target_y_col in frame_data.columns:
             target_x = frame_data[target_x_col].iloc[0] if not frame_data.empty else 0
@@ -351,6 +405,16 @@ class BehavioralSMOTE:
             alpha = np.random.random()  # Random interpolation weight
             synthetic_feature = sample + alpha * (neighbor - sample)
             
+            # Validate synthetic feature quality
+            if all(f == 0.0 for f in synthetic_feature):
+                logger.warning(f"SMOTE: Generated all-zero synthetic feature for {behavior}, skipping")
+                continue
+            
+            # Check for reasonable feature values (not too extreme)
+            if np.any(np.abs(synthetic_feature) > 1000):
+                logger.warning(f"SMOTE: Generated extreme synthetic feature for {behavior}, clipping values")
+                synthetic_feature = np.clip(synthetic_feature, -1000, 1000)
+            
             # Create synthetic sample metadata
             synthetic_sample = {
                 'video_id': f'synthetic_{behavior}_{len(synthetic_samples)}',
@@ -358,13 +422,54 @@ class BehavioralSMOTE:
                 'agent_id': 'synthetic_agent',
                 'target_id': 'synthetic_target',
                 'behavior': behavior,
-                'synthetic': True  # Mark as synthetic
+                'synthetic': True,  # Mark as synthetic
+                'feature_vector': synthetic_feature.tolist()  # Store feature vector for validation
             }
             
             synthetic_samples.append(synthetic_sample)
         
         logger.info(f"Generated {len(synthetic_samples)} synthetic samples for {behavior}")
+        
+        # Validate synthetic samples
+        self._validate_synthetic_samples(synthetic_samples, behavior)
+        
         return synthetic_samples
+    
+    def _validate_synthetic_samples(self, synthetic_samples: List[Dict], behavior: str) -> None:
+        """Validate quality of synthetic samples"""
+        if not synthetic_samples:
+            return
+        
+        logger.info(f"Validating {len(synthetic_samples)} synthetic samples for {behavior}")
+        
+        # Check feature vector quality
+        valid_samples = 0
+        all_zero_samples = 0
+        extreme_samples = 0
+        
+        for sample in synthetic_samples:
+            if 'feature_vector' in sample:
+                feature_vector = np.array(sample['feature_vector'])
+                
+                # Check for all-zero vectors
+                if all(f == 0.0 for f in feature_vector):
+                    all_zero_samples += 1
+                    continue
+                
+                # Check for extreme values
+                if np.any(np.abs(feature_vector) > 1000):
+                    extreme_samples += 1
+                    continue
+                
+                valid_samples += 1
+        
+        logger.info(f"Synthetic sample validation for {behavior}:")
+        logger.info(f"  Valid samples: {valid_samples}/{len(synthetic_samples)}")
+        logger.info(f"  All-zero samples: {all_zero_samples}")
+        logger.info(f"  Extreme value samples: {extreme_samples}")
+        
+        if valid_samples < len(synthetic_samples) * 0.5:
+            logger.warning(f"Low quality synthetic samples for {behavior}: only {valid_samples}/{len(synthetic_samples)} are valid")
 
 
 def apply_smote_augmentation(frame_labels_df: pd.DataFrame, tracking_data: Dict, 

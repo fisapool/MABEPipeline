@@ -144,21 +144,27 @@ def calculate_precision(ground_truth: pd.DataFrame, predictions: pd.DataFrame) -
         Precision value
     """
     if len(predictions) == 0:
+        logger.warning("No predictions provided for precision calculation")
         return 0.0
+    
+    logger.info(f"Calculating precision: {len(predictions)} predictions vs {len(ground_truth)} ground truth")
     
     # Count true positives and false positives
     tp = 0
     fp = 0
     
-    for _, pred in predictions.iterrows():
+    for idx, pred in predictions.iterrows():
         # Check if prediction matches any ground truth
         matches = find_matching_ground_truth(pred, ground_truth)
         if matches:
             tp += 1
+            logger.debug(f"True positive: prediction {idx} matches {len(matches)} ground truth entries")
         else:
             fp += 1
+            logger.debug(f"False positive: prediction {idx} (video={pred.get('video_id', 'unknown')}, action={pred.get('action', 'unknown')})")
     
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    logger.info(f"Precision calculation: TP={tp}, FP={fp}, Precision={precision:.4f}")
     return precision
 
 
@@ -174,21 +180,27 @@ def calculate_recall(ground_truth: pd.DataFrame, predictions: pd.DataFrame) -> f
         Recall value
     """
     if len(ground_truth) == 0:
+        logger.warning("No ground truth provided for recall calculation")
         return 0.0
+    
+    logger.info(f"Calculating recall: {len(predictions)} predictions vs {len(ground_truth)} ground truth")
     
     # Count true positives and false negatives
     tp = 0
     fn = 0
     
-    for _, gt in ground_truth.iterrows():
+    for idx, gt in ground_truth.iterrows():
         # Check if ground truth matches any prediction
         matches = find_matching_predictions(gt, predictions)
         if matches:
             tp += 1
+            logger.debug(f"True positive: ground truth {idx} matches {len(matches)} predictions")
         else:
             fn += 1
+            logger.debug(f"False negative: ground truth {idx} (video={gt.get('video_id', 'unknown')}, action={gt.get('action', 'unknown')})")
     
     recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    logger.info(f"Recall calculation: TP={tp}, FN={fn}, Recall={recall:.4f}")
     return recall
 
 
@@ -257,7 +269,14 @@ def frames_overlap(pred: pd.Series, gt: pd.Series) -> bool:
     gt_end = gt['stop_frame']
     
     # Check for overlap
-    return not (pred_end <= gt_start or gt_end <= pred_start)
+    overlap = not (pred_end <= gt_start or gt_end <= pred_start)
+    
+    if not overlap:
+        logger.debug(f"No frame overlap: pred[{pred_start}-{pred_end}] vs gt[{gt_start}-{gt_end}]")
+    else:
+        logger.debug(f"Frame overlap found: pred[{pred_start}-{pred_end}] vs gt[{gt_start}-{gt_end}]")
+    
+    return overlap
 
 
 def calculate_behavior_f_scores(ground_truth: pd.DataFrame, predictions: pd.DataFrame) -> Dict[str, float]:

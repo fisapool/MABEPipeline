@@ -120,49 +120,98 @@ class MouseBehaviorDataset(Dataset):
     def extract_tracking_features(self, video_id, frame, agent_id, target_id, idx):
         """Extract comprehensive features from tracking data - MATCHES inference.py"""
         features = []
+        dummy_vector_returned = False
         
         if self.tracking_data is None or video_id not in self.tracking_data:
             # Return dummy features if tracking data not available
+            logger.warning(f"Tracking data not available for video {video_id}, returning dummy features")
+            dummy_vector_returned = True
             return [0.0] * 26
         
         tracking_df = self.tracking_data[video_id]
         
+        # Log tracking data info for debugging
+        logger.debug(f"Extracting features for video {video_id}, frame {frame}, agent {agent_id}, target {target_id}")
+        logger.debug(f"Tracking data shape: {tracking_df.shape}, columns: {list(tracking_df.columns)}")
+        
         # Try different ways to access frame data
         try:
-            # Method 1: If 'frame' column exists
-            if 'frame' in tracking_df.columns:
-                frame_data = tracking_df[tracking_df['frame'] == frame]
+            # Method 1: Check for 'frame' or 'Frame' column (case-insensitive)
+            frame_col = None
+            for col in tracking_df.columns:
+                if col.lower() == 'frame':
+                    frame_col = col
+                    break
+            
+            if frame_col is not None:
+                # Handle both int and float frame values
+                frame_data = tracking_df[tracking_df[frame_col] == frame]
+                logger.debug(f"Using '{frame_col}' column, found {len(frame_data)} rows")
             else:
                 # Method 2: If frame is the index
                 if frame in tracking_df.index:
                     frame_data = tracking_df.loc[[frame]]
+                    logger.debug(f"Using frame as index, found {len(frame_data)} rows")
                 else:
                     # Method 3: If frame is a row number
                     if frame < len(tracking_df):
                         frame_data = tracking_df.iloc[[frame]]
+                        logger.debug(f"Using frame as row number, found {len(frame_data)} rows")
                     else:
-                        logger.warning(f"Frame {frame} not found in tracking data")
+                        logger.warning(f"Frame {frame} not found in tracking data (max frame: {len(tracking_df)-1})")
+                        logger.warning(f"Available columns: {list(tracking_df.columns)}")
+                        dummy_vector_returned = True
                         return [0.0] * 26
             
             if frame_data.empty:
-                logger.warning(f"No data found for frame {frame}")
+                logger.warning(f"No data found for frame {frame} in video {video_id}")
+                dummy_vector_returned = True
                 return [0.0] * 26
                 
         except Exception as e:
-            logger.warning(f"Error accessing frame data: {e}")
+            logger.warning(f"Error accessing frame data for video {video_id}, frame {frame}: {e}")
+            dummy_vector_returned = True
             return [0.0] * 26
         
         # Extract spatial features
-        spatial_features = self.extract_spatial_features(frame_data, agent_id, target_id)
-        features.extend(spatial_features)
+        try:
+            spatial_features = self.extract_spatial_features(frame_data, agent_id, target_id)
+            features.extend(spatial_features)
+            logger.debug(f"Extracted {len(spatial_features)} spatial features")
+        except Exception as e:
+            logger.warning(f"Error extracting spatial features: {e}")
+            features.extend([0.0] * 12)  # Default spatial features
         
         # Extract temporal features
-        temporal_features = self.extract_temporal_features(tracking_df, frame)
-        features.extend(temporal_features)
+        try:
+            temporal_features = self.extract_temporal_features(tracking_df, frame)
+            features.extend(temporal_features)
+            logger.debug(f"Extracted {len(temporal_features)} temporal features")
+        except Exception as e:
+            logger.warning(f"Error extracting temporal features: {e}")
+            features.extend([0.0] * 10)  # Default temporal features
         
         # Extract interaction features
-        interaction_features = self.extract_interaction_features(frame_data, agent_id, target_id)
-        features.extend(interaction_features)
+        try:
+            interaction_features = self.extract_interaction_features(frame_data, agent_id, target_id)
+            features.extend(interaction_features)
+            logger.debug(f"Extracted {len(interaction_features)} interaction features")
+        except Exception as e:
+            logger.warning(f"Error extracting interaction features: {e}")
+            features.extend([0.0] * 4)  # Default interaction features
+        
+        # Validate feature count and quality
+        assert len(features) == 26, f"Expected 26 features, got {len(features)}"
+        
+        # Check for dummy vector
+        if all(f == 0.0 for f in features):
+            logger.warning(f"All-zero feature vector detected for video {video_id}, frame {frame}")
+            dummy_vector_returned = True
+        
+        # Log feature statistics for debugging
+        if not dummy_vector_returned:
+            non_zero_count = sum(1 for f in features if f != 0.0)
+            logger.debug(f"Feature vector: {non_zero_count}/26 non-zero values, range: [{min(features):.3f}, {max(features):.3f}]")
         
         return features
     
@@ -170,9 +219,10 @@ class MouseBehaviorDataset(Dataset):
         """Extract spatial features from frame data - MATCHES train.py and inference.py"""
         features = []
         
-        # Agent position
-        agent_x_col = f'{agent_id}_body_center_x'
-        agent_y_col = f'{agent_id}_body_center_y'
+        # Agent position (ensure agent_id is string)
+        agent_id_str = str(agent_id)
+        agent_x_col = f'{agent_id_str}_body_center_x'
+        agent_y_col = f'{agent_id_str}_body_center_y'
         
         if agent_x_col in frame_data.columns and agent_y_col in frame_data.columns:
             agent_x = frame_data[agent_x_col].iloc[0] if not frame_data.empty else 0
@@ -181,9 +231,10 @@ class MouseBehaviorDataset(Dataset):
         else:
             features.extend([0.0, 0.0])
         
-        # Target position
-        target_x_col = f'{target_id}_body_center_x'
-        target_y_col = f'{target_id}_body_center_y'
+        # Target position (ensure target_id is string)
+        target_id_str = str(target_id)
+        target_x_col = f'{target_id_str}_body_center_x'
+        target_y_col = f'{target_id_str}_body_center_y'
         
         if target_x_col in frame_data.columns and target_y_col in frame_data.columns:
             target_x = frame_data[target_x_col].iloc[0] if not frame_data.empty else 0
@@ -339,35 +390,60 @@ class MABEDataPreprocessor:
         """Load tracking data for videos in frame labels"""
         logger.info("Loading tracking data...")
         
-        # Get unique videos
+        # Get unique videos and normalize to strings
         unique_videos = frame_labels_df['video_id'].unique()[:max_videos]
+        unique_videos = [str(vid) for vid in unique_videos]  # Normalize to strings
+        logger.info(f"Requested videos: {unique_videos}")
         
-        for video_id in unique_videos:
-            # Find lab_id for this video
-            train_csv_path = self.dataset_path / "train.csv"
-            if not train_csv_path.exists():
-                logger.warning(f"Train CSV not found: {train_csv_path}")
-                continue
-                
-            train_df = pd.read_csv(train_csv_path)
-            video_metadata = train_df[train_df['video_id'] == video_id]
-            if video_metadata.empty:
-                continue
-                
-            lab_id = video_metadata.iloc[0]['lab_id']
+        # Try to load converted tracking data first
+        converted_tracking_dir = self.dataset_path / "converted_tracking"
+        if converted_tracking_dir.exists():
+            logger.info("Loading converted tracking data...")
+            from .tracking_converter import TrackingDataConverter
+            converter = TrackingDataConverter()
+            self.tracking_data = converter.create_tracking_data_loader(str(converted_tracking_dir))
             
-            # Load tracking data
-            tracking_path = self.dataset_path / "train_tracking" / lab_id / f"{video_id}.parquet"
+            # Filter to only include videos we need and normalize keys
+            filtered_data = {}
+            for k, v in self.tracking_data.items():
+                str_key = str(k)
+                if str_key in unique_videos:
+                    filtered_data[str_key] = v
+            self.tracking_data = filtered_data
+            logger.info(f"Loaded converted tracking data for {len(self.tracking_data)} videos")
+            return
+        
+        # If no converted data, try to convert on the fly
+        keypoints_dir = self.dataset_path / "train_tracking" / "MABe22_keypoints"
+        if keypoints_dir.exists():
+            logger.info("Converting tracking data on the fly...")
+            from .tracking_converter import TrackingDataConverter
+            converter = TrackingDataConverter()
             
-            if tracking_path.exists():
-                try:
-                    tracking_df = pd.read_parquet(tracking_path)
-                    self.tracking_data[video_id] = tracking_df
-                    logger.info(f"Loaded tracking for {lab_id}/{video_id}: {tracking_df.shape}")
-                except Exception as e:
-                    logger.warning(f"Error loading tracking for {video_id}: {e}")
+            for video_id in unique_videos:
+                tracking_file = keypoints_dir / f"{video_id}.parquet"
+                
+                if tracking_file.exists():
+                    try:
+                        # Convert the file
+                        converted_df = converter.convert_tracking_file(str(tracking_file))
+                        self.tracking_data[str(video_id)] = converted_df  # Store with string key
+                        logger.info(f"Converted and loaded tracking data for video {video_id}: {converted_df.shape}")
+                    except Exception as e:
+                        logger.warning(f"Error converting tracking data for video {video_id}: {e}")
+                else:
+                    logger.warning(f"Tracking file not found for video {video_id}: {tracking_file}")
+        else:
+            # Fallback: create sample data for testing
+            logger.warning("No tracking data found. Creating sample data for testing...")
+            from .tracking_converter import create_sample_tracking_data
+            sample_data = create_sample_tracking_data()
+            # Normalize sample data keys to strings
+            self.tracking_data = {str(k): v for k, v in sample_data.items() if str(k) in unique_videos}
+            logger.info(f"Using sample tracking data for {len(self.tracking_data)} videos")
         
         logger.info(f"Loaded tracking data for {len(self.tracking_data)} videos")
+        logger.info(f"Tracking data keys: {list(self.tracking_data.keys())}")
     
     def _create_frame_labels_from_annotations(self, max_videos=5):
         """Create frame labels from annotation files with behaviors_labeled filtering"""
@@ -411,8 +487,8 @@ class MABEDataPreprocessor:
                     
                     # Create frame labels for each annotation
                     for _, annotation in annotation_df.iterrows():
-                        agent_id = annotation['agent_id']
-                        target_id = annotation['target_id']
+                        agent_id = str(annotation['agent_id'])  # Normalize to string
+                        target_id = str(annotation['target_id'])  # Normalize to string
                         action = annotation['action']
                         start_frame = annotation['start_frame']
                         stop_frame = annotation['stop_frame']

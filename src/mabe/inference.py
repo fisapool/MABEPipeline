@@ -172,39 +172,92 @@ class TestMouseBehaviorDataset(Dataset):
     def extract_tracking_features(self, video_id, frame, agent_id, target_id):
         """Extract features from tracking data - EXACTLY matches train.py"""
         features = []
+        dummy_vector_returned = False
         
         if video_id not in self.tracking_data:
             # Return dummy features if tracking data not available
+            logger.warning(f"Tracking data not available for video {video_id}, returning dummy features")
+            dummy_vector_returned = True
             return [0.0] * 26
         
         tracking_df = self.tracking_data[video_id]
         
-        # Get frame data - handle different column names
-        if 'frame' in tracking_df.columns:
-            frame_data = tracking_df[tracking_df['frame'] == frame]
-        elif 'Frame' in tracking_df.columns:
-            frame_data = tracking_df[tracking_df['Frame'] == frame]
-        else:
-            # If no frame column, use index as frame
-            if frame < len(tracking_df):
-                frame_data = tracking_df.iloc[frame:frame+1]
+        # Log tracking data info for debugging
+        logger.debug(f"Extracting features for video {video_id}, frame {frame}, agent {agent_id}, target {target_id}")
+        logger.debug(f"Tracking data shape: {tracking_df.shape}, columns: {list(tracking_df.columns)}")
+        
+        # Get frame data - handle different column names (case-insensitive)
+        try:
+            # Check for 'frame' or 'Frame' column (case-insensitive)
+            frame_col = None
+            for col in tracking_df.columns:
+                if col.lower() == 'frame':
+                    frame_col = col
+                    break
+            
+            if frame_col is not None:
+                # Handle both int and float frame values
+                frame_data = tracking_df[tracking_df[frame_col] == frame]
+                logger.debug(f"Using '{frame_col}' column, found {len(frame_data)} rows")
             else:
-                return [0.0] * 26
+                # If no frame column, use index as frame
+                if frame < len(tracking_df):
+                    frame_data = tracking_df.iloc[frame:frame+1]
+                    logger.debug(f"Using frame as row number, found {len(frame_data)} rows")
+                else:
+                    logger.warning(f"Frame {frame} not found in tracking data (max frame: {len(tracking_df)-1})")
+                    logger.warning(f"Available columns: {list(tracking_df.columns)}")
+                    dummy_vector_returned = True
+                    return [0.0] * 26
+        except Exception as e:
+            logger.warning(f"Error accessing frame data for video {video_id}, frame {frame}: {e}")
+            dummy_vector_returned = True
+            return [0.0] * 26
         
         if frame_data.empty:
+            logger.warning(f"No data found for frame {frame} in video {video_id}")
+            dummy_vector_returned = True
             return [0.0] * 26
         
         # Extract spatial features
-        spatial_features = self.extract_spatial_features(frame_data, agent_id, target_id)
-        features.extend(spatial_features)
+        try:
+            spatial_features = self.extract_spatial_features(frame_data, agent_id, target_id)
+            features.extend(spatial_features)
+            logger.debug(f"Extracted {len(spatial_features)} spatial features")
+        except Exception as e:
+            logger.warning(f"Error extracting spatial features: {e}")
+            features.extend([0.0] * 12)  # Default spatial features
         
         # Extract temporal features
-        temporal_features = self.extract_temporal_features(tracking_df, frame)
-        features.extend(temporal_features)
+        try:
+            temporal_features = self.extract_temporal_features(tracking_df, frame)
+            features.extend(temporal_features)
+            logger.debug(f"Extracted {len(temporal_features)} temporal features")
+        except Exception as e:
+            logger.warning(f"Error extracting temporal features: {e}")
+            features.extend([0.0] * 10)  # Default temporal features
         
         # Extract interaction features
-        interaction_features = self.extract_interaction_features(frame_data, agent_id, target_id)
-        features.extend(interaction_features)
+        try:
+            interaction_features = self.extract_interaction_features(frame_data, agent_id, target_id)
+            features.extend(interaction_features)
+            logger.debug(f"Extracted {len(interaction_features)} interaction features")
+        except Exception as e:
+            logger.warning(f"Error extracting interaction features: {e}")
+            features.extend([0.0] * 4)  # Default interaction features
+        
+        # Validate feature count and quality
+        assert len(features) == 26, f"Expected 26 features, got {len(features)}"
+        
+        # Check for dummy vector
+        if all(f == 0.0 for f in features):
+            logger.warning(f"All-zero feature vector detected for video {video_id}, frame {frame}")
+            dummy_vector_returned = True
+        
+        # Log feature statistics for debugging
+        if not dummy_vector_returned:
+            non_zero_count = sum(1 for f in features if f != 0.0)
+            logger.debug(f"Feature vector: {non_zero_count}/26 non-zero values, range: [{min(features):.3f}, {max(features):.3f}]")
         
         return features
     
@@ -212,9 +265,10 @@ class TestMouseBehaviorDataset(Dataset):
         """Extract spatial features from frame data"""
         features = []
         
-        # Agent position
-        agent_x_col = f'{agent_id}_body_center_x'
-        agent_y_col = f'{agent_id}_body_center_y'
+        # Agent position (ensure agent_id is string)
+        agent_id_str = str(agent_id)
+        agent_x_col = f'{agent_id_str}_body_center_x'
+        agent_y_col = f'{agent_id_str}_body_center_y'
         
         if agent_x_col in frame_data.columns and agent_y_col in frame_data.columns:
             agent_x = frame_data[agent_x_col].iloc[0] if not frame_data.empty else 0
@@ -223,9 +277,10 @@ class TestMouseBehaviorDataset(Dataset):
         else:
             features.extend([0.0, 0.0])
         
-        # Target position
-        target_x_col = f'{target_id}_body_center_x'
-        target_y_col = f'{target_id}_body_center_y'
+        # Target position (ensure target_id is string)
+        target_id_str = str(target_id)
+        target_x_col = f'{target_id_str}_body_center_x'
+        target_y_col = f'{target_id_str}_body_center_y'
         
         if target_x_col in frame_data.columns and target_y_col in frame_data.columns:
             target_x = frame_data[target_x_col].iloc[0] if not frame_data.empty else 0
@@ -415,22 +470,25 @@ def load_model(model_path: str, model_class: str = 'cnn', input_dim: int = 26) -
                 model = BehaviorCNNWithAttention(input_dim=input_dim, num_classes=8, dropout=0.3)
                 state_dict = torch.load(model_path, map_location='cpu')
                 model.load_state_dict(state_dict)
-                logger.info(f"Loaded enhanced CNN with attention")
+                logger.info(f"✓ Loaded enhanced CNN with attention (input_dim={input_dim}, num_classes=8)")
+                logger.info(f"  Model architecture: BehaviorCNNWithAttention with multi-head attention")
                 return model
             except Exception as e:
                 logger.warning(f"Could not load enhanced model: {e}")
-                logger.info("Falling back to old architecture")
+                logger.info("Falling back to basic CNN architecture")
                 # Fall back to old architecture
                 model = BehaviorCNN_Old(input_dim=input_dim, num_classes=8)
                 state_dict = torch.load(model_path, map_location='cpu')
                 model.load_state_dict(state_dict, strict=False)
-                logger.info(f"Successfully loaded old CNN model")
+                logger.info(f"✓ Successfully loaded basic CNN model (input_dim={input_dim}, num_classes=8)")
+                logger.info(f"  Model architecture: BehaviorCNN_Old (256→128→8 fully connected)")
                 return model
         elif model_class.lower() == 'lstm':
             model = BehaviorLSTM_Old(input_dim=input_dim, hidden_dim=128, num_classes=8)
             state_dict = torch.load(model_path, map_location='cpu')
             model.load_state_dict(state_dict, strict=False)
-            logger.info(f"Successfully loaded {model_class} model")
+            logger.info(f"✓ Successfully loaded LSTM model (input_dim={input_dim}, hidden_dim=128, num_classes=8)")
+            logger.info(f"  Model architecture: BehaviorLSTM_Old with 2 LSTM layers")
             return model
         else:
             raise ValueError(f"Unknown model class: {model_class}")

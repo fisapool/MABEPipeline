@@ -132,26 +132,52 @@ def load_tracking_data(cfg: Dict, test_df: pd.DataFrame) -> Dict:
         Dictionary with tracking data
     """
     dataset_path = Path(cfg.get('dataset', {}).get('path', ''))
-    test_tracking_dir = dataset_path / "test_tracking"
     
     tracking_data = {}
     
-    for _, video_row in test_df.iterrows():
-        video_id = video_row['video_id']
-        lab_id = video_row['lab_id']
+    # Try to load converted tracking data first
+    converted_tracking_dir = dataset_path / "converted_tracking"
+    if converted_tracking_dir.exists():
+        logger.info("Loading converted tracking data...")
+        from .tracking_converter import TrackingDataConverter
+        converter = TrackingDataConverter()
+        tracking_data = converter.create_tracking_data_loader(str(converted_tracking_dir))
         
-        # Load tracking data
-        tracking_path = test_tracking_dir / lab_id / f"{video_id}.parquet"
+        # Filter to only include videos we need
+        video_ids = test_df['video_id'].unique()
+        tracking_data = {k: v for k, v in tracking_data.items() if k in video_ids}
+        logger.info(f"Loaded converted tracking data for {len(tracking_data)} videos")
+        return tracking_data
+    
+    # If no converted data, try to convert on the fly
+    keypoints_dir = dataset_path / "train_tracking" / "MABe22_keypoints"
+    if keypoints_dir.exists():
+        logger.info("Converting tracking data on the fly...")
+        from .tracking_converter import TrackingDataConverter
+        converter = TrackingDataConverter()
         
-        if tracking_path.exists():
-            try:
-                tracking_df = pd.read_parquet(tracking_path)
-                tracking_data[video_id] = tracking_df
-                logger.info(f"Loaded tracking for {lab_id}/{video_id}: {tracking_df.shape}")
-            except Exception as e:
-                logger.warning(f"Error loading tracking for {video_id}: {e}")
-        else:
-            logger.warning(f"Tracking data not found: {tracking_path}")
+        for _, video_row in test_df.iterrows():
+            video_id = video_row['video_id']
+            tracking_file = keypoints_dir / f"{video_id}.parquet"
+            
+            if tracking_file.exists():
+                try:
+                    # Convert the file
+                    converted_df = converter.convert_tracking_file(str(tracking_file))
+                    tracking_data[video_id] = converted_df
+                    logger.info(f"Converted and loaded tracking data for video {video_id}: {converted_df.shape}")
+                except Exception as e:
+                    logger.warning(f"Error converting tracking data for video {video_id}: {e}")
+            else:
+                logger.warning(f"Tracking file not found for video {video_id}: {tracking_file}")
+    else:
+        # Fallback: create sample data for testing
+        logger.warning("No tracking data found. Creating sample data for testing...")
+        from .tracking_converter import create_sample_tracking_data
+        sample_data = create_sample_tracking_data()
+        video_ids = test_df['video_id'].unique()
+        tracking_data = {k: v for k, v in sample_data.items() if k in video_ids}
+        logger.info(f"Using sample tracking data for {len(tracking_data)} videos")
     
     logger.info(f"Loaded tracking data for {len(tracking_data)} videos")
     return tracking_data
