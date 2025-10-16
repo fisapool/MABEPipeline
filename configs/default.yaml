@@ -5,7 +5,11 @@ dataset:
   path: C:/Users/MYPC/Documents/MABEDatasets/MABe-extracted
   train_csv: train.csv
   test_csv: test.csv
-  frame_labels_sample: data/sample_frame_labels.csv
+  sample_submission_csv: sample_submission.csv
+  train_annotation_dir: train_annotation
+  train_tracking_dir: train_tracking
+  test_tracking_dir: test_tracking
+  frame_labels_sample: data/sample_frame_labels.csv # For CI/testing
 
 paths:
   models_dir: outputs/models
