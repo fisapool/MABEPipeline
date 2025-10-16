@@ -240,7 +240,7 @@ def train(model, train_loader, val_loader, cfg: Dict, resume_checkpoint: Optiona
     
     # Resume from checkpoint if provided
     start_epoch = 0
-    if resume_checkpoint and Path(resume_checkpoint).exists():
+    if resume_checkpoint is not None and Path(resume_checkpoint).exists():
         logger.info(f"Resuming from checkpoint: {resume_checkpoint}")
         checkpoint = torch.load(resume_checkpoint, map_location=device)
         model.load_state_dict(checkpoint['model_state_dict'])
@@ -361,9 +361,10 @@ def _save_model(model, cfg: Dict, best_val_acc: float, epochs_trained: int) -> s
     
     # Determine model filename based on model type
     model_type = cfg.get('training', {}).get('model_type', 'both')
-    if 'cnn' in str(type(model)).lower():
+    model_class_name = str(type(model).__name__).lower()
+    if 'cnn' in model_class_name:
         model_filename = cfg['paths']['cnn_model_filename']
-    elif 'lstm' in str(type(model)).lower():
+    elif 'lstm' in model_class_name:
         model_filename = cfg['paths']['lstm_model_filename']
     else:
         model_filename = f"model_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pth"

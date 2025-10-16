@@ -78,7 +78,7 @@ def run_training(cfg: Dict, resume: bool = False, checkpoint_path: Optional[str]
         
         # Train single model
         result = train(model, train_loader, val_loader, cfg, 
-                      resume_checkpoint=checkpoint_path if resume else None)
+                      resume_checkpoint=checkpoint_path)
         training_results[model_name] = result
         
         logger.info(f"{model_name.upper()} training completed: "

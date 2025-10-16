@@ -114,7 +114,7 @@ class MouseBehaviorDataset(Dataset):
         """Extract comprehensive features from tracking data - MATCHES inference.py"""
         features = []
         
-        if video_id not in self.tracking_data:
+        if self.tracking_data is None or video_id not in self.tracking_data:
             # Return dummy features if tracking data not available
             return [0.0] * 26
         
