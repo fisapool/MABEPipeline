@@ -406,12 +406,10 @@ def load_ground_truth(cfg: Dict) -> pd.DataFrame:
     Returns:
         Ground truth DataFrame
     """
-    # This is a placeholder - in practice, you'd load actual ground truth data
-    logger.info("Loading ground truth data...")
+    from .ground_truth_loader import load_ground_truth_for_evaluation
     
-    # For now, return empty DataFrame
-    # In practice, you'd load from the dataset path
-    return pd.DataFrame()
+    logger.info("Loading ground truth data...")
+    return load_ground_truth_for_evaluation(cfg)
 
 
 def compare_predictions(predictions1: pd.DataFrame, predictions2: pd.DataFrame, 

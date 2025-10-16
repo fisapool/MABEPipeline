@@ -493,8 +493,20 @@ def create_kaggle_submission(predictions: List[Dict], cfg: Dict, min_duration: i
     for pred in predictions:
         # Ensure types are native Python ints/strs for grouping
         video_id = int(pred['video_id']) if hasattr(pred['video_id'], 'item') else int(pred['video_id'])
-        agent_id = int(pred['agent_id']) if hasattr(pred['agent_id'], 'item') else int(pred['agent_id'])
-        target_id = int(pred['target_id']) if hasattr(pred['target_id'], 'item') else int(pred['target_id'])
+        
+        # Handle agent_id and target_id - convert mouse1/mouse2 to 1/2
+        agent_id_str = str(pred['agent_id'])
+        if agent_id_str.startswith('mouse'):
+            agent_id = int(agent_id_str.replace('mouse', ''))
+        else:
+            agent_id = int(agent_id_str) if agent_id_str.isdigit() else 1
+            
+        target_id_str = str(pred['target_id'])
+        if target_id_str.startswith('mouse'):
+            target_id = int(target_id_str.replace('mouse', ''))
+        else:
+            target_id = int(target_id_str) if target_id_str.isdigit() else 2
+            
         behavior_name = str(pred.get('behavior_name', pred.get('behavior')))
         
         key = (video_id, agent_id, target_id, behavior_name)
