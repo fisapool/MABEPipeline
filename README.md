@@ -10,6 +10,8 @@ A production-ready machine learning pipeline for the MABE (Mouse Behavior Analys
 - **Backward Compatible**: Works with existing MABE datasets and models
 - **Production Ready**: Comprehensive logging, error handling, and validation
 - **CLI Interface**: Single command-line tool for all pipeline operations
+- **Local Evaluation**: Comprehensive evaluation with ground truth data for model development
+- **Flexible Evaluation**: Both competition-style and local evaluation options
 
 ## Quick Start
 
@@ -60,7 +62,20 @@ python bin/run_pipeline.py train --config configs/default.yaml --resume
 ```
 
 ### Hyperparameter Tuning
+
+#### Phase 1: Class Imbalance Optimization (Recommended)
 ```bash
+# Multi-objective tuning focusing on behavior diversity
+python bin/run_pipeline.py tune \
+  --config configs/default.yaml \
+  --phase class_imbalance \
+  --n-trials 30 \
+  --diversity-weight 0.2
+```
+
+#### Standard Hyperparameter Tuning
+```bash
+# Traditional single-objective tuning
 python bin/run_pipeline.py tune --config configs/default.yaml --n-trials 50
 ```
 
@@ -70,9 +85,25 @@ python bin/run_pipeline.py infer --config configs/default.yaml --confidence 0.4
 ```
 
 ### Evaluation
+
+#### Pipeline Evaluation (for competition submissions)
 ```bash
 python bin/run_pipeline.py evaluate --config configs/default.yaml --predictions outputs/submissions/submission_20241016_123456.csv
 ```
+
+#### Local Evaluation (with ground truth data)
+```bash
+# Evaluate with all ground truth data
+python scripts/evaluate_local.py --predictions outputs/submissions/submission_20241016_123456.csv
+
+# Evaluate with limited videos (faster)
+python scripts/evaluate_local.py --predictions outputs/submissions/submission_20241016_123456.csv --max-videos 10
+
+# Specify custom output path
+python scripts/evaluate_local.py --predictions outputs/submissions/submission_20241016_123456.csv --output results.json
+```
+
+**Note**: The local evaluation script provides comprehensive metrics using actual ground truth data from your MABE dataset, while the pipeline evaluation is designed for competition submissions without ground truth.
 
 ## Configuration
 
@@ -145,10 +176,37 @@ MABEPipeline/
 │   └── studies/                 # Optuna studies
 ├── tests/                       # Unit tests
 ├── scripts/                     # Utility scripts
+│   └── evaluate_local.py        # Local evaluation with ground truth
 └── requirements.txt             # Dependencies
 ```
 
 ## Advanced Usage
+
+### Local Evaluation with Ground Truth
+
+The local evaluation script provides comprehensive metrics for model development and validation:
+
+```bash
+# Basic evaluation
+python scripts/evaluate_local.py --predictions your_predictions.csv
+
+# Evaluate with video limit (faster for testing)
+python scripts/evaluate_local.py --predictions your_predictions.csv --max-videos 5
+
+# Custom output location
+python scripts/evaluate_local.py --predictions your_predictions.csv --output my_results.json
+```
+
+**Features:**
+- **Overall F-score**: Overall model performance
+- **Per-behavior F-scores**: Performance for each behavior type (approach, attack, avoid, etc.)
+- **Per-video F-scores**: Performance breakdown by video
+- **Detailed metrics**: Precision, recall, and comprehensive statistics
+- **Ground truth integration**: Uses actual MABE dataset annotations
+
+**Requirements:**
+- Predictions must be in the standard format: `video_id, agent_id, target_id, action, start_frame, stop_frame`
+- Ground truth data must be available in the dataset path (training videos only)
 
 ### Custom Configuration
 
@@ -174,8 +232,39 @@ python bin/run_pipeline.py train --config my_config.yaml
 
 ### Hyperparameter Tuning
 
-Run Optuna optimization:
+#### Multi-Objective Optimization (Phase 1: Class Imbalance)
+Focus on improving behavior diversity and F1 score:
 ```bash
+# Phase 1: Class imbalance parameters (focal loss, augmentation, class weights)
+python bin/run_pipeline.py tune \
+  --config configs/default.yaml \
+  --phase class_imbalance \
+  --n-trials 30 \
+  --diversity-weight 0.2 \
+  --timeout 3600
+```
+
+#### Analyze Tuning Results
+```bash
+# Analyze results and get recommendations
+python scripts/analyze_tuning_results.py \
+  --results outputs/optuna_results_*.json \
+  --output-dir outputs/analysis
+```
+
+#### Train with Best Parameters
+```bash
+# Train with optimized hyperparameters
+python bin/run_pipeline.py train \
+  --config configs/default.yaml \
+  --override training.focal_gamma=3.0 \
+  --override training.class_weight_power=1.5 \
+  --override training.augment_factor=3.0
+```
+
+#### Standard Single-Objective Tuning
+```bash
+# Traditional optimization (accuracy only)
 python bin/run_pipeline.py tune --config configs/default.yaml --n-trials 100 --timeout 3600
 ```
 
@@ -194,6 +283,8 @@ python bin/run_pipeline.py train --config configs/default.yaml --resume --checkp
 2. **Out of memory**: Reduce `training.batch_size` in config
 3. **Missing data**: Check `dataset.path` in config points to correct location
 4. **Import errors**: Ensure all dependencies are installed with `pip install -r requirements.txt`
+5. **Local evaluation returns 0.0000 F-score**: This is expected for test predictions (no ground truth). Use training data for meaningful evaluation.
+6. **Ground truth not found**: Ensure your dataset path contains the `train_annotation/` directory with parquet files.
 
 ### Debug Mode
 

@@ -80,6 +80,12 @@ Examples:
                             help='Timeout in seconds')
     tune_parser.add_argument('--model-type', choices=['cnn', 'lstm', 'both'], default='both',
                             help='Model type to tune')
+    tune_parser.add_argument('--phase', 
+                            choices=['class_imbalance', 'architecture', 'training', 'all'],
+                            default='class_imbalance',
+                            help='Tuning phase: which hyperparameters to focus on')
+    tune_parser.add_argument('--diversity-weight', type=float, default=0.2,
+                            help='Weight for behavior diversity in objective (0.0-1.0)')
     
     # Infer command
     infer_parser = subparsers.add_parser('infer', help='Run inference')
@@ -89,6 +95,8 @@ Examples:
                              help='Output submission file path')
     infer_parser.add_argument('--confidence', type=float, default=None,
                              help='Confidence threshold')
+    infer_parser.add_argument('--val-videos', nargs='+', type=str, default=None,
+                             help='List of training video IDs to use for validation inference')
     
     # Evaluate command
     eval_parser = subparsers.add_parser('evaluate', help='Evaluate predictions')
@@ -175,6 +183,15 @@ def run_tune_command(args, cfg: dict) -> int:
             cfg['optuna']['n_trials'] = args.n_trials
         if args.timeout:
             cfg['optuna']['timeout'] = args.timeout
+        if hasattr(args, 'phase'):
+            cfg['optuna']['phase'] = args.phase
+        if hasattr(args, 'diversity_weight'):
+            cfg['optuna']['diversity_weight'] = args.diversity_weight
+        
+        # Log tuning configuration
+        logger.info(f"Tuning phase: {cfg['optuna'].get('phase', 'class_imbalance')}")
+        logger.info(f"Diversity weight: {cfg['optuna'].get('diversity_weight', 0.2)}")
+        logger.info(f"Number of trials: {cfg['optuna'].get('n_trials', 30)}")
         
         # Run tuning
         results = run_optuna(cfg)
@@ -198,17 +215,28 @@ def run_infer_command(args, cfg: dict) -> int:
         confidence = getattr(args, 'confidence', None)
         test_csv = getattr(args, 'test_csv', None)
         output_path = getattr(args, 'output', None)
+        val_videos = getattr(args, 'val_videos', None)
         
         # Override config with command line arguments
         if confidence:
             cfg['inference']['confidence_threshold'] = confidence
         
-        # Run inference
-        submission_df = run_inference(
-            cfg=cfg,
-            test_csv=test_csv,
-            output_path=output_path
-        )
+        # Check if this is validation inference on training videos
+        if val_videos:
+            logger.info(f"Running validation inference on training videos: {val_videos}")
+            from mabe.infer_pipeline import run_inference_on_training
+            submission_df = run_inference_on_training(
+                cfg=cfg,
+                val_video_ids=val_videos,
+                output_path=output_path
+            )
+        else:
+            # Regular test inference
+            submission_df = run_inference(
+                cfg=cfg,
+                test_csv=test_csv,
+                output_path=output_path
+            )
         
         logger.info(f"Inference completed: {len(submission_df)} predictions generated")
         return 0

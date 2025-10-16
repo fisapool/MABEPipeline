@@ -24,7 +24,7 @@ def load_ground_truth_from_parquet(dataset_path: str, video_ids: Optional[List[s
         video_ids: Optional list of specific video IDs to load
         
     Returns:
-        DataFrame with ground truth annotations
+        DataFrame with ground truth annotations including lab_id and behaviors_labeled
     """
     dataset_path = Path(dataset_path)
     annotation_path = dataset_path / "train_annotation"
@@ -32,6 +32,16 @@ def load_ground_truth_from_parquet(dataset_path: str, video_ids: Optional[List[s
     if not annotation_path.exists():
         logger.error(f"Annotation path not found: {annotation_path}")
         return pd.DataFrame()
+    
+    # Load train.csv metadata for lab_id and behaviors_labeled
+    train_csv_path = dataset_path / "train.csv"
+    if not train_csv_path.exists():
+        logger.error(f"Train CSV not found: {train_csv_path}")
+        return pd.DataFrame()
+    
+    logger.info("Loading train.csv metadata...")
+    train_metadata = pd.read_csv(train_csv_path)
+    logger.info(f"Loaded metadata for {len(train_metadata)} videos")
     
     all_annotations = []
     
@@ -55,8 +65,18 @@ def load_ground_truth_from_parquet(dataset_path: str, video_ids: Optional[List[s
                     if 'video_id' not in df.columns:
                         df['video_id'] = video_id
                     
+                    # Get metadata for this video
+                    video_metadata = train_metadata[train_metadata['video_id'] == int(video_id)]
+                    if len(video_metadata) == 0:
+                        logger.warning(f"No metadata found for video {video_id}")
+                        continue
+                    
+                    # Add lab_id and behaviors_labeled from train.csv
+                    df['lab_id'] = video_metadata.iloc[0]['lab_id']
+                    df['behaviors_labeled'] = video_metadata.iloc[0]['behaviors_labeled']
+                    
                     all_annotations.append(df)
-                    logger.info(f"Loaded {len(df)} annotations from {video_id}")
+                    logger.info(f"Loaded {len(df)} annotations from {video_id} (lab: {df['lab_id'].iloc[0]})")
                     
                 except Exception as e:
                     logger.warning(f"Failed to load {parquet_file}: {e}")
@@ -90,6 +110,7 @@ def standardize_ground_truth_format(df: pd.DataFrame) -> pd.DataFrame:
     
     # Ensure required columns exist with proper names
     required_columns = ['video_id', 'agent_id', 'target_id', 'action', 'start_frame', 'stop_frame']
+    kaggle_columns = ['lab_id', 'behaviors_labeled']  # Additional columns for Kaggle metric
     
     # Map common column name variations
     column_mapping = {}
@@ -118,6 +139,12 @@ def standardize_ground_truth_format(df: pd.DataFrame) -> pd.DataFrame:
         logger.info(f"Available columns: {df.columns.tolist()}")
         raise ValueError(f"Missing required columns: {missing_columns}")
     
+    # Check for Kaggle-specific columns
+    missing_kaggle_columns = [col for col in kaggle_columns if col not in df.columns]
+    if missing_kaggle_columns:
+        logger.warning(f"Missing Kaggle metric columns: {missing_kaggle_columns}")
+        logger.info("Kaggle metric evaluation will not be available")
+    
     # Convert to appropriate types
     df['video_id'] = df['video_id'].astype(str)
     df['agent_id'] = df['agent_id'].astype(str)
@@ -125,6 +152,12 @@ def standardize_ground_truth_format(df: pd.DataFrame) -> pd.DataFrame:
     df['action'] = df['action'].astype(str)
     df['start_frame'] = df['start_frame'].astype(int)
     df['stop_frame'] = df['stop_frame'].astype(int)
+    
+    # Convert Kaggle columns if present
+    if 'lab_id' in df.columns:
+        df['lab_id'] = df['lab_id'].astype(str)
+    if 'behaviors_labeled' in df.columns:
+        df['behaviors_labeled'] = df['behaviors_labeled'].astype(str)
     
     return df
 

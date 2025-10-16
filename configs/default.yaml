@@ -21,29 +21,86 @@ paths:
   lstm_model_filename: lstm_enhanced_model.pth
 
 training:
-  model_type: both  # 'cnn'|'lstm'|'both'
-  batch_size: 32
-  epochs: 30
-  learning_rate: 0.001
-  weight_decay: 0.0
+  model_type: cnn  # Focus on enhanced CNN with attention
+  batch_size: 32   # Larger batch for better gradient estimates
+  epochs: 50       # More epochs for convergence
+  learning_rate: 0.0005  # Best from tuning: Lower LR for better convergence
+  weight_decay: 0.0001
   val_fraction: 0.2
-  max_videos: 5
+  max_videos: 5    # More training data
   use_augmentation: true
-  augment_factor: 2.0
-  early_stopping_patience: 10
+  augment_factor: 3.0  # Best from tuning: More aggressive augmentation
+  early_stopping_patience: 20  # More patience
   resume_checkpoint: null
+  use_focal_loss: true
+  focal_gamma: 4.0  # Best from tuning: Higher gamma for more focus on hard examples
+  focal_alpha: 0.75  # Best from tuning: Alpha weighting for focal loss
+  class_weight_power: 2.0  # Best from tuning: Power for class weight transformation
+  use_attention: true  # Enable attention mechanism
+  stratified_sampling: true  # Enable stratified sampling
+  num_heads: 4  # Number of attention heads
+  dropout: 0.4  # Best from tuning: Dropout rate
+  
+  # SMOTE configuration
+  use_smote: true
+  smote_k_neighbors: 5
+  smote_target_ratio: 0.5  # Oversample minorities to 50% of majority
+  
+  # Enhanced augmentation
+  minority_class_threshold: 1000
+  missing_class_augmentation: 10.0
+  
+  # Calibration
+  use_calibration: true
+  calibration_temperature_init: 1.5
+  
+  # Class-balanced loss
+  use_class_balanced_loss: true  # New: enables effective number reweighting
+  cb_loss_beta: 0.9999  # Effective number parameter
 
 inference:
-  confidence_threshold: 0.4
+  confidence_threshold: 0.05
   ensemble_method: max  # 'average'|'max'
   min_duration: 1
   csv_columns: [video_id, agent_id, target_id, action, start_frame, stop_frame]
 
+preprocessing:
+  use_interval_context: true  # Include interval boundaries in frame labels
+  negative_sampling: false    # Disable for now to focus on positive examples
+  negative_sampling_ratio: 0.5  # Ratio of negative to positive samples
+  filter_by_behaviors_labeled: true  # Only use actively labeled behaviors
+  aggressive_augmentation: false  # Disable aggressive augmentation
+  balanced_augmentation: true  # Use balanced augmentation
+
+inference:
+  window_overlap: false  # Use non-overlapping windows
+  frame_step: 30  # Step size for frame sampling
+  deduplicate_frames: true  # Remove duplicate frame predictions
+  dense_frame_prediction: true  # Predict every frame in window
+  
+post_processing:
+  merge_gap: 5  # Smaller gap for shorter intervals
+  min_interval_duration: 5  # Min frames for valid interval
+  confidence_threshold: 0.2  # Higher confidence threshold
+  smooth_predictions: true  # Apply temporal smoothing
+  max_interval_length: 200  # Limit maximum interval length
+
+evaluation:
+  use_kaggle_metric: true  # Use Kaggle-compatible frame-level metric
+  fallback_to_legacy: true  # Fall back to legacy metric if Kaggle metric fails
+  validation_split:  # Videos to use for validation inference
+    video_ids: []  # List of specific video IDs, e.g., ["44566106", "143861384"]
+    percentage: 0.2  # Percentage of training videos to use for validation
+    random_seed: 42  # Seed for random validation split
+
 optuna:
-  n_trials: 50
+  n_trials: 30  # Phase 1: focused search
   timeout: 3600
   n_splits: 3
   ci_mode: false
+  optimization_objective: 'multi_objective'  # New: multi-objective vs single
+  diversity_weight: 0.2  # Weight for behavior diversity in objective
+  phase: 'class_imbalance'  # Current tuning phase
 
 device:
   use_cuda: true

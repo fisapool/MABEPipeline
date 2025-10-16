@@ -19,13 +19,14 @@ from .utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def evaluate_predictions(ground_truth: pd.DataFrame, predictions: pd.DataFrame) -> Dict:
+def evaluate_predictions(ground_truth: pd.DataFrame, predictions: pd.DataFrame, use_kaggle_metric: bool = True) -> Dict:
     """
     Evaluate predictions against ground truth
     
     Args:
         ground_truth: Ground truth DataFrame
         predictions: Predictions DataFrame
+        use_kaggle_metric: Whether to use Kaggle-compatible metric (default: True)
         
     Returns:
         Dictionary with evaluation metrics
@@ -35,6 +36,25 @@ def evaluate_predictions(ground_truth: pd.DataFrame, predictions: pd.DataFrame) 
     # Convert to standard format if needed
     gt_df = standardize_dataframe(ground_truth)
     pred_df = standardize_dataframe(predictions)
+    
+    # Try Kaggle metric first if requested
+    if use_kaggle_metric:
+        try:
+            from .kaggle_metric import evaluate_with_kaggle_metric, validate_kaggle_compatibility
+            
+            # Check if data is compatible with Kaggle metric
+            if validate_kaggle_compatibility(gt_df, pred_df):
+                logger.info("Using Kaggle-compatible metric for evaluation")
+                return evaluate_with_kaggle_metric(gt_df, pred_df)
+            else:
+                logger.warning("Data not compatible with Kaggle metric, falling back to simple metric")
+        except ImportError:
+            logger.warning("Kaggle metric module not available, falling back to simple metric")
+        except Exception as e:
+            logger.warning(f"Kaggle metric evaluation failed: {e}, falling back to simple metric")
+    
+    # Fall back to simple metric
+    logger.info("Using simple annotation-level metric for evaluation")
     
     # Calculate metrics
     metrics = {}

@@ -1,0 +1,7 @@
+DIAGNOSTIC REPORT FOR VIDEO 44566106
+Generated: 2025-10-16 20:11:26.762602
+
+Ground Truth: 342 annotations
+Predictions: 1116 predictions
+Overlapping frames: 388
+F1 Score: Error

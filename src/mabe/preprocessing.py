@@ -53,13 +53,20 @@ class MouseBehaviorDataset(Dataset):
         # Find majority class count
         max_count = class_counts.max()
         
-        # Calculate augmentation multipliers for each class
+        # Calculate balanced augmentation multipliers using configurable factor
         self.augment_multipliers = {}
         for class_id, count in class_counts.items():
-            if count < max_count * 0.5:  # Augment classes with less than 50% of majority class
-                multiplier = min(self.augment_factor, max_count / count)
-                self.augment_multipliers[class_id] = multiplier
-                logger.info(f"Class {class_id} will be augmented by factor {multiplier:.2f}")
+            if count < 1000:  # Very small classes
+                multiplier = self.augment_factor  # Use configurable factor
+            elif count < 5000:  # Small classes
+                multiplier = self.augment_factor * 0.75  # 75% of configurable factor
+            elif count < max_count * 0.1:  # Less than 10% of max
+                multiplier = self.augment_factor * 0.5  # 50% of configurable factor
+            else:
+                multiplier = 1.0  # No augmentation
+                
+            self.augment_multipliers[class_id] = multiplier
+            logger.info(f"Class {class_id} will be augmented by factor {multiplier:.2f} (base factor: {self.augment_factor})")
         
     def __len__(self):
         return len(self.frame_labels)
@@ -363,7 +370,7 @@ class MABEDataPreprocessor:
         logger.info(f"Loaded tracking data for {len(self.tracking_data)} videos")
     
     def _create_frame_labels_from_annotations(self, max_videos=5):
-        """Create frame labels from annotation files"""
+        """Create frame labels from annotation files with behaviors_labeled filtering"""
         logger.info("Creating frame labels from annotations...")
         
         frame_labels = []
@@ -383,6 +390,17 @@ class MABEDataPreprocessor:
                 continue
                 
             lab_id = video_metadata.iloc[0]['lab_id']
+            behaviors_labeled_str = video_metadata.iloc[0]['behaviors_labeled']
+            
+            # Parse behaviors_labeled to get active behavior keys
+            try:
+                import json
+                behaviors_labeled = json.loads(behaviors_labeled_str)
+                active_keys = set(behaviors_labeled)
+                logger.info(f"Video {video_id}: Active behaviors = {len(active_keys)} behaviors")
+            except (json.JSONDecodeError, KeyError) as e:
+                logger.warning(f"Could not parse behaviors_labeled for video {video_id}: {e}")
+                active_keys = set()  # Skip this video if we can't parse behaviors
             
             # Load annotation data
             annotation_path = self.dataset_path / "train_annotation" / lab_id / f"{video_id}.parquet"
@@ -399,6 +417,14 @@ class MABEDataPreprocessor:
                         start_frame = annotation['start_frame']
                         stop_frame = annotation['stop_frame']
                         
+                        # Check if this behavior was actively labeled for this video
+                        # Convert numeric IDs to mouse format for comparison
+                        mouse_agent = f"mouse{agent_id}"
+                        mouse_target = f"mouse{target_id}"
+                        behavior_key = f"{mouse_agent},{mouse_target},{action}"
+                        if behavior_key not in active_keys:
+                            continue  # Skip behaviors not in the labeled set
+                        
                         # Create a label for each frame in the range
                         for frame in range(start_frame, stop_frame + 1):
                             frame_labels.append({
@@ -406,15 +432,18 @@ class MABEDataPreprocessor:
                                 'frame': frame,
                                 'agent_id': agent_id,
                                 'target_id': target_id,
-                                'behavior': action
+                                'behavior': action,
+                                'interval_start': start_frame,  # Preserve interval context
+                                'interval_stop': stop_frame,   # Preserve interval context
+                                'frame_position': (frame - start_frame) / max(1, stop_frame - start_frame)  # Relative position in interval
                             })
                     
-                    logger.info(f"Created {len(annotation_df)} annotations for {video_id}")
+                    logger.info(f"Created {len(annotation_df)} annotations for {video_id} (filtered by behaviors_labeled)")
                 except Exception as e:
                     logger.warning(f"Error loading annotations for {video_id}: {e}")
         
         frame_labels_df = pd.DataFrame(frame_labels)
-        logger.info(f"Created {len(frame_labels_df)} frame labels")
+        logger.info(f"Created {len(frame_labels_df)} frame labels (filtered by behaviors_labeled)")
         
         return frame_labels_df
     
@@ -497,17 +526,42 @@ class MABEDataPreprocessor:
         train_df = frame_labels_df[:train_size]
         val_df = frame_labels_df[train_size:]
         
+        # Get augmentation factor from config
+        augment_factor = self.cfg.get('training', {}).get('augment_factor', 2.0)
+        
         # Create datasets with augmentation for training
         train_dataset = MouseBehaviorDataset(train_df, self.tracking_data, 
-                                           augment=use_augmentation, augment_factor=2.0)
+                                           augment=use_augmentation, augment_factor=augment_factor)
         val_dataset = MouseBehaviorDataset(val_df, self.tracking_data, augment=False)
         
-        # Create weighted sampler for balanced training
-        weighted_sampler = self._create_weighted_sampler(train_df)
+        # Create stratified sampler for balanced training
+        stratified_sampling = self.cfg.get('training', {}).get('stratified_sampling', True)
+        
+        if stratified_sampling:
+            # Create stratified sampler for balanced batches
+            from torch.utils.data import WeightedRandomSampler
+            
+            train_labels = train_df['behavior'].map(self.behavior_map).values
+            
+            # Calculate sampling weights to balance classes in each batch
+            class_counts = np.bincount(train_labels)
+            class_weights = 1.0 / (class_counts + 1)  # +1 to avoid division by zero
+            sample_weights = class_weights[train_labels]
+            
+            # Create weighted sampler
+            sampler = WeightedRandomSampler(
+                weights=sample_weights,
+                num_samples=len(train_labels),
+                replacement=True
+            )
+            logger.info("Using stratified sampling for balanced batches")
+        else:
+            # Use existing weighted sampler
+            sampler = self._create_weighted_sampler(train_df)
         
         # Create data loaders
         train_loader = DataLoader(train_dataset, batch_size=batch_size, 
-                                sampler=weighted_sampler, num_workers=0)
+                                sampler=sampler, num_workers=0)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, 
                               shuffle=False, num_workers=0)
         

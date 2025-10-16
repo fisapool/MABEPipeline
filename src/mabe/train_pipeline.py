@@ -50,6 +50,28 @@ def run_training(cfg: Dict, resume: bool = False, checkpoint_path: Optional[str]
         logger.error("No frame labels generated. Check data paths and configuration.")
         return {}
     
+    # Step 1.5: Apply SMOTE augmentation if enabled
+    training_cfg = cfg.get('training', {})
+    if training_cfg.get('use_smote', False):
+        logger.info("Step 1.5/5: Applying SMOTE augmentation")
+        from .smote_augmentation import apply_smote_augmentation
+        
+        # Load tracking data for SMOTE
+        dataset_path = Path(cfg.get('dataset', {}).get('path', ''))
+        tracking_data = {}
+        
+        # Load tracking data for each video
+        for video_id in frame_labels_df['video_id'].unique():
+            tracking_file = dataset_path / 'train_tracking' / f'{video_id}.csv'
+            if tracking_file.exists():
+                tracking_df = pd.read_csv(tracking_file)
+                tracking_data[video_id] = tracking_df
+                logger.info(f"Loaded tracking data for {video_id}: {len(tracking_df)} frames")
+        
+        # Apply SMOTE augmentation
+        frame_labels_df = apply_smote_augmentation(frame_labels_df, tracking_data, cfg)
+        logger.info(f"SMOTE augmentation complete. Dataset size: {len(frame_labels_df)}")
+    
     # Step 2: Create datasets and data loaders
     logger.info("Step 2/5: Creating datasets and data loaders")
     train_loader, val_loader, train_dataset, val_dataset = create_dataset(frame_labels_df, cfg)

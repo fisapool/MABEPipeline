@@ -216,7 +216,7 @@ def generate_predictions(cfg: Dict, test_df: pd.DataFrame, tracking_data: Dict, 
     """
     device = torch.device(cfg.get('device', {}).get('device_str', 'cuda:0'))
     inference_cfg = cfg.get('inference', {})
-    confidence_threshold = inference_cfg.get('confidence_threshold', 0.4)
+    confidence_threshold = inference_cfg.get('confidence_threshold', 0.05)
     ensemble_method = inference_cfg.get('ensemble_method', 'max')
     
     # Create test dataset
@@ -393,6 +393,68 @@ def validate_inference_setup(cfg: Dict) -> bool:
     return True
 
 
+def run_inference_on_training(cfg: Dict, val_video_ids: List[str], output_path: Optional[str] = None) -> pd.DataFrame:
+    """
+    Run inference on training videos for validation purposes.
+    
+    This allows evaluating model performance on held-out training videos
+    where ground truth is available for proper evaluation.
+    
+    Args:
+        cfg: Configuration dictionary
+        val_video_ids: List of training video IDs to use for validation
+        output_path: Optional output path for submission file
+        
+    Returns:
+        DataFrame with predictions
+    """
+    logger.info(f"Running inference on {len(val_video_ids)} training videos for validation...")
+    logger.info(f"Validation videos: {val_video_ids}")
+    
+    # Create a modified config for training data inference
+    val_cfg = cfg.copy()
+    
+    # Override paths to use training data instead of test data
+    dataset_path = Path(cfg['dataset']['path'])
+    val_cfg['paths']['test_csv_path'] = str(dataset_path / "train.csv")
+    val_cfg['paths']['test_tracking_dir'] = str(dataset_path / "train_tracking")
+    
+    # Load training metadata
+    train_csv_path = dataset_path / "train.csv"
+    if not train_csv_path.exists():
+        raise FileNotFoundError(f"Training CSV not found: {train_csv_path}")
+    
+    train_df = pd.read_csv(train_csv_path)
+    
+    # Filter to only validation videos
+    val_df = train_df[train_df['video_id'].astype(str).isin(val_video_ids)]
+    if len(val_df) == 0:
+        raise ValueError(f"No training videos found for IDs: {val_video_ids}")
+    
+    logger.info(f"Found {len(val_df)} training videos for validation")
+    
+    # Save filtered training data as temporary test CSV
+    temp_test_csv = Path(cfg['paths']['outputs_dir']) / "temp_val_test.csv"
+    temp_test_csv.parent.mkdir(parents=True, exist_ok=True)
+    val_df.to_csv(temp_test_csv, index=False)
+    
+    # Update config to use temporary test CSV
+    val_cfg['paths']['test_csv_path'] = str(temp_test_csv)
+    
+    try:
+        # Run inference using the modified config
+        submission_df = run_inference(val_cfg, test_csv=str(temp_test_csv), output_path=output_path)
+        
+        logger.info(f"Validation inference completed: {len(submission_df)} predictions generated")
+        return submission_df
+        
+    finally:
+        # Clean up temporary file
+        if temp_test_csv.exists():
+            temp_test_csv.unlink()
+            logger.info("Cleaned up temporary validation test CSV")
+
+
 def get_inference_summary(cfg: Dict) -> Dict:
     """
     Get summary of inference configuration and available models
@@ -408,7 +470,7 @@ def get_inference_summary(cfg: Dict) -> Dict:
     summary = {
         'configuration': {
             'device': cfg.get('device', {}).get('device_str', 'cuda:0'),
-            'confidence_threshold': cfg.get('inference', {}).get('confidence_threshold', 0.4),
+            'confidence_threshold': cfg.get('inference', {}).get('confidence_threshold', 0.05),
             'ensemble_method': cfg.get('inference', {}).get('ensemble_method', 'max')
         },
         'data': {

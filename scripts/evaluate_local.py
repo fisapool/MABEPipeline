@@ -30,8 +30,16 @@ def main():
     parser.add_argument("--config", default="configs/default.yaml", help="Path to config file")
     parser.add_argument("--output", help="Output path for evaluation results")
     parser.add_argument("--max-videos", type=int, help="Maximum number of videos to evaluate")
+    parser.add_argument("--use-kaggle-metric", action="store_true", default=True, 
+                       help="Use Kaggle-compatible metric (default: True)")
+    parser.add_argument("--legacy", action="store_true", 
+                       help="Use legacy annotation-level metric instead of Kaggle metric")
     
     args = parser.parse_args()
+    
+    # Handle legacy flag
+    if args.legacy:
+        args.use_kaggle_metric = False
     
     # Load configuration
     cfg = load_config(args.config)
@@ -70,7 +78,7 @@ def main():
     # Run evaluation
     logger.info("Running evaluation...")
     try:
-        metrics = evaluate_predictions(ground_truth, predictions)
+        metrics = evaluate_predictions(ground_truth, predictions, use_kaggle_metric=args.use_kaggle_metric)
     except Exception as e:
         logger.error(f"Evaluation failed: {e}")
         return 1

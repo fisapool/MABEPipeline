@@ -248,7 +248,65 @@ def objective_fn(trial, cfg, train_df, val_df):
     return score
 ```
 
-### 6. Evaluation Metrics
+### 6. Behavior Diversity Optimization
+
+**Multi-Objective Hyperparameter Tuning**: The pipeline now supports multi-objective optimization that balances F1 score with behavior diversity to address class imbalance issues.
+
+**Phase 1: Class Imbalance Focus**:
+```python
+def objective_fn(trial, cfg, train_df, val_df):
+    # Sample Phase 1 hyperparameters (class imbalance focus)
+    params = {
+        'focal_gamma': trial.suggest_categorical('focal_gamma', [2.0, 3.0, 4.0, 5.0]),
+        'focal_alpha': trial.suggest_categorical('focal_alpha', [0.25, 0.5, 0.75, 1.0]),
+        'augment_factor': trial.suggest_categorical('augment_factor', [1.5, 2.0, 3.0, 5.0]),
+        'class_weight_power': trial.suggest_categorical('class_weight_power', [0.5, 1.0, 1.5, 2.0]),
+        'learning_rate': trial.suggest_categorical('learning_rate', [0.0005, 0.001, 0.002]),
+        'batch_size': trial.suggest_categorical('batch_size', [16, 32, 64]),
+        'dropout': trial.suggest_categorical('dropout', [0.2, 0.3, 0.4, 0.5])
+    }
+    
+    # Train and evaluate with predictions tracking
+    val_acc, predictions = train_and_evaluate_with_predictions(model, params, train_df, val_df)
+    
+    # Calculate diversity score
+    diversity_score = calculate_behavior_diversity(predictions)
+    
+    # Multi-objective: F1 + weighted diversity
+    diversity_impact = diversity_score * 20.0  # Scale to ~20% impact
+    combined_score = val_acc + diversity_impact
+    
+    return combined_score
+```
+
+**Behavior Diversity Metrics**:
+```python
+def calculate_behavior_diversity(predictions, num_classes=8):
+    """Calculate diversity score based on unique behaviors predicted"""
+    if len(predictions) == 0:
+        return 0.0
+    
+    unique_behaviors = len(np.unique(predictions))
+    return unique_behaviors / num_classes  # 0.0 to 1.0 score
+```
+
+**Class Weight Power Transformation**:
+```python
+def compute_class_weights_with_power(labels, power=1.0):
+    """Compute class weights with configurable power for stronger/weaker weighting"""
+    weights = compute_class_weight('balanced', classes=np.unique(labels), y=labels)
+    weights = np.power(weights, power)  # Apply power transformation
+    weights = weights * (len(weights) / weights.sum())  # Normalize
+    return torch.FloatTensor(weights)
+```
+
+**Expected Improvements**:
+- **Behaviors Predicted**: 2 → 4-5 behaviors
+- **F1 Score**: 0.041 → 0.10-0.15 (2-3x improvement)
+- **Training Stability**: Better convergence with tuned focal loss
+- **Behavior Distribution**: More balanced across classes
+
+### 7. Evaluation Metrics
 
 **F-Score Calculation**:
 ```python

@@ -65,8 +65,20 @@ class TestMouseBehaviorDataset(Dataset):
             
             if not available_mice:
                 logger.warning(f"No mouse tracking data found for {video_id}")
-                # Create default mouse pair
-                available_mice = [('mouse1', 'mouse2')]
+                # Get mouse IDs from test_df metadata
+                mouse_ids = []
+                for i in range(1, 5):  # Support up to 4 mice
+                    mouse_col = f'mouse{i}_id'
+                    if mouse_col in video_row.index and pd.notna(video_row[mouse_col]):
+                        mouse_ids.append(f'mouse{i}')
+                
+                if not mouse_ids:
+                    mouse_ids = ['mouse1', 'mouse2']  # Fallback
+                
+                # Generate all possible agent->target pairs
+                available_mice = [(agent, target) for agent in mouse_ids 
+                                  for target in mouse_ids]
+                logger.info(f"Generated {len(available_mice)} mouse pairs from metadata: {mouse_ids}")
             
             # Generate predictions for all mouse pairs
             for agent_id, target_id in available_mice:
@@ -75,23 +87,24 @@ class TestMouseBehaviorDataset(Dataset):
                     
                 logger.info(f"Generating predictions for {video_id}: {agent_id}->{target_id}")
                 
-                # Use sliding window approach for all interactions
+                # Use non-overlapping windows to avoid duplicates
                 window_size = 30  # frames
-                step_size = 10    # frames (less overlap for faster processing)
+                step_size = 30    # frames (no overlap to avoid duplicates)
                 
                 for start_frame in range(0, total_frames - window_size + 1, step_size):
                     end_frame = min(start_frame + window_size, total_frames)
-                    center_frame = (start_frame + end_frame) // 2
                     
-                    predictions_data.append({
-                        'video_id': video_id,
-                        'frame': center_frame,
-                        'start_frame': start_frame,
-                        'end_frame': end_frame,
-                        'agent_id': agent_id,
-                        'target_id': target_id,
-                        'annotated_behaviors': []  # No annotations for test data
-                    })
+                    # Predict for EVERY frame in this window (dense prediction)
+                    for frame in range(start_frame, end_frame):
+                        predictions_data.append({
+                            'video_id': video_id,
+                            'frame': frame,  # EVERY frame, not just center
+                            'start_frame': start_frame,
+                            'end_frame': end_frame,
+                            'agent_id': agent_id,
+                            'target_id': target_id,
+                            'annotated_behaviors': []  # No annotations for test data
+                        })
         
         logger.info(f"Generated {len(predictions_data)} test predictions")
         
@@ -382,7 +395,7 @@ class BehaviorLSTM_Old(nn.Module):
 
 def load_model(model_path: str, model_class: str = 'cnn', input_dim: int = 26) -> nn.Module:
     """
-    Load trained model from file
+    Load trained model from file with backward compatibility
     
     Args:
         model_path: Path to model file
@@ -395,26 +408,39 @@ def load_model(model_path: str, model_class: str = 'cnn', input_dim: int = 26) -
     logger.info(f"Loading {model_class} model from {model_path}")
     
     try:
+        # Try loading with new architecture first
         if model_class.lower() == 'cnn':
-            model = BehaviorCNN_Old(input_dim=input_dim, num_classes=8)
+            try:
+                from .train import BehaviorCNNWithAttention
+                model = BehaviorCNNWithAttention(input_dim=input_dim, num_classes=8, dropout=0.3)
+                state_dict = torch.load(model_path, map_location='cpu')
+                model.load_state_dict(state_dict)
+                logger.info(f"Loaded enhanced CNN with attention")
+                return model
+            except Exception as e:
+                logger.warning(f"Could not load enhanced model: {e}")
+                logger.info("Falling back to old architecture")
+                # Fall back to old architecture
+                model = BehaviorCNN_Old(input_dim=input_dim, num_classes=8)
+                state_dict = torch.load(model_path, map_location='cpu')
+                model.load_state_dict(state_dict, strict=False)
+                logger.info(f"Successfully loaded old CNN model")
+                return model
         elif model_class.lower() == 'lstm':
             model = BehaviorLSTM_Old(input_dim=input_dim, hidden_dim=128, num_classes=8)
+            state_dict = torch.load(model_path, map_location='cpu')
+            model.load_state_dict(state_dict, strict=False)
+            logger.info(f"Successfully loaded {model_class} model")
+            return model
         else:
             raise ValueError(f"Unknown model class: {model_class}")
-        
-        # Load state dict
-        state_dict = torch.load(model_path, map_location='cpu')
-        model.load_state_dict(state_dict, strict=False)
-        
-        logger.info(f"Successfully loaded {model_class} model")
-        return model
         
     except Exception as e:
         logger.error(f"Error loading model from {model_path}: {e}")
         raise
 
 
-def predict_single(model, data_loader, device, return_proba: bool = True) -> np.ndarray:
+def predict_single(model, data_loader, device, temp_scaler=None, return_proba: bool = True) -> np.ndarray:
     """
     Make predictions with a single model
     
@@ -422,6 +448,7 @@ def predict_single(model, data_loader, device, return_proba: bool = True) -> np.
         model: PyTorch model
         data_loader: Data loader
         device: Device to run on
+        temp_scaler: Temperature scaler for calibration (optional)
         return_proba: Whether to return probabilities or class predictions
         
     Returns:
@@ -434,6 +461,10 @@ def predict_single(model, data_loader, device, return_proba: bool = True) -> np.
         for data, video_ids, frames, agent_ids, target_ids in data_loader:
             data = data.to(device)
             outputs = model(data)
+            
+            # Apply temperature scaling if provided
+            if temp_scaler is not None:
+                outputs = temp_scaler(outputs)
             
             if return_proba:
                 probabilities = F.softmax(outputs, dim=1)
@@ -519,13 +550,18 @@ def create_kaggle_submission(predictions: List[Dict], cfg: Dict, min_duration: i
     for (video_id, agent_id, target_id, behavior_name), frames in grouped_predictions.items():
         if not frames:
             continue
-        frames = sorted(frames)
-        # Build continuous ranges (frames are individual frame indices)
+        
+        # Remove duplicates and sort
+        frames = sorted(set(frames))  # Deduplicate frames
+        
+        # Build continuous ranges with improved merging
         ranges = []
         start = frames[0]
         end = frames[0]
+        min_gap = 20  # Larger gap for better merging (close to step_size=30)
+        
         for i in range(1, len(frames)):
-            if frames[i] == frames[i-1] + 1:
+            if frames[i] <= end + min_gap:  # Merge if within 20 frames
                 end = frames[i]
             else:
                 if (end - start + 1) >= min_duration:
@@ -533,6 +569,21 @@ def create_kaggle_submission(predictions: List[Dict], cfg: Dict, min_duration: i
                 start = end = frames[i]
         if (end - start + 1) >= min_duration:
             ranges.append((start, end))
+        
+        # Post-process ranges to limit maximum interval length
+        max_interval_length = cfg.get('post_processing', {}).get('max_interval_length', 200)  # frames
+        processed_ranges = []
+        for start, end in ranges:
+            if (end - start + 1) > max_interval_length:
+                # Split long intervals into smaller chunks
+                current_start = start
+                while current_start <= end:
+                    current_end = min(current_start + max_interval_length - 1, end)
+                    processed_ranges.append((current_start, current_end))
+                    current_start = current_end + 1
+            else:
+                processed_ranges.append((start, end))
+        ranges = processed_ranges
         
         for start_frame, stop_frame_inclusive in ranges:
             # Convert inclusive stop_frame to exclusive as scorer expects

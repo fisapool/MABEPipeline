@@ -95,6 +95,58 @@ class BehaviorCNN(nn.Module):
         return x
 
 
+class BehaviorCNNWithAttention(nn.Module):
+    """Enhanced CNN with multi-head attention for temporal modeling"""
+    
+    def __init__(self, input_dim, num_classes, dropout=0.3, num_heads=4):
+        super(BehaviorCNNWithAttention, self).__init__()
+        
+        self.input_dim = input_dim
+        self.num_classes = num_classes
+        
+        # Feature extraction layers
+        self.fc1 = nn.Linear(input_dim, 256)
+        self.fc2 = nn.Linear(256, 128)
+        
+        # Multi-head attention for temporal modeling
+        self.attention = nn.MultiheadAttention(
+            embed_dim=128,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True
+        )
+        
+        # Classification head
+        self.fc3 = nn.Linear(128, 64)
+        self.fc4 = nn.Linear(64, num_classes)
+        
+        self.dropout = nn.Dropout(dropout)
+        self.relu = nn.ReLU()
+        self.layer_norm = nn.LayerNorm(128)
+        
+    def forward(self, x):
+        # Flatten and extract features
+        x = x.view(x.size(0), -1)
+        x = self.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.relu(self.fc2(x))
+        
+        # Add temporal dimension for attention
+        x = x.unsqueeze(1)  # (batch, 1, 128)
+        
+        # Self-attention with residual connection
+        attended, _ = self.attention(x, x, x)
+        x = self.layer_norm(x + attended)  # Residual + LayerNorm
+        
+        # Classification
+        x = x.squeeze(1)
+        x = self.relu(self.fc3(x))
+        x = self.dropout(x)
+        x = self.fc4(x)
+        
+        return x
+
+
 class BehaviorLSTM(nn.Module):
     """LSTM model for temporal behavior classification - MATCHES inference.py OLD architecture"""
     
@@ -139,6 +191,114 @@ class BehaviorLSTM(nn.Module):
         return output
 
 
+class FocalLoss(nn.Module):
+    """
+    Focal Loss for handling class imbalance
+    FL(pt) = -α(1-pt)^γ * log(pt)
+    """
+    def __init__(self, alpha=None, gamma=2.0, alpha_weight=1.0, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha  # Class weights (tensor)
+        self.gamma = gamma  # Focusing parameter
+        self.alpha_weight = alpha_weight  # Scaling factor for alpha
+        self.reduction = reduction
+    
+    def forward(self, inputs, targets):
+        # Apply alpha_weight scaling if alpha is provided
+        alpha_weights = self.alpha
+        if alpha_weights is not None and self.alpha_weight != 1.0:
+            alpha_weights = alpha_weights * self.alpha_weight
+        
+        # Compute cross entropy
+        ce_loss = F.cross_entropy(inputs, targets, weight=alpha_weights, reduction='none')
+        
+        # Compute pt = exp(-ce_loss)
+        pt = torch.exp(-ce_loss)
+        
+        # Compute focal loss: (1-pt)^gamma * ce_loss
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+        
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
+
+
+class ClassBalancedFocalLoss(nn.Module):
+    """
+    Class-Balanced Focal Loss combining effective number reweighting with focal loss
+    
+    Based on "Class-Balanced Loss Based on Effective Number of Samples"
+    https://arxiv.org/abs/1901.05555
+    """
+    def __init__(self, samples_per_class, num_classes=8, beta=0.9999, gamma=2.0, 
+                 alpha_weight=1.0, reduction='mean'):
+        super(ClassBalancedFocalLoss, self).__init__()
+        self.num_classes = num_classes
+        self.beta = beta
+        self.gamma = gamma
+        self.alpha_weight = alpha_weight
+        self.reduction = reduction
+        
+        # Calculate effective number of samples for each class
+        self.effective_num = self._calculate_effective_num(samples_per_class)
+        
+        # Calculate class-balanced weights
+        self.class_weights = self._calculate_class_weights()
+        
+        logger.info(f"Class-balanced weights: {self.class_weights}")
+    
+    def _calculate_effective_num(self, samples_per_class):
+        """Calculate effective number of samples for each class"""
+        effective_num = []
+        for n in samples_per_class:
+            if n == 0:
+                # Handle missing classes with minimum effective number
+                effective_num.append(1.0)
+            else:
+                # Effective number: (1 - beta^n) / (1 - beta)
+                effective_num.append((1 - self.beta ** n) / (1 - self.beta))
+        
+        return torch.tensor(effective_num, dtype=torch.float32)
+    
+    def _calculate_class_weights(self):
+        """Calculate class-balanced weights"""
+        # Weight = 1 / effective_num
+        weights = 1.0 / self.effective_num
+        
+        # Normalize weights to maintain scale
+        weights = weights * len(weights) / weights.sum()
+        
+        return weights
+    
+    def forward(self, inputs, targets):
+        # Get class-balanced weights for current batch
+        device = inputs.device
+        class_weights = self.class_weights.to(device)
+        
+        # Apply alpha_weight scaling
+        if self.alpha_weight != 1.0:
+            class_weights = class_weights * self.alpha_weight
+        
+        # Compute cross entropy with class-balanced weights
+        ce_loss = F.cross_entropy(inputs, targets, weight=class_weights, reduction='none')
+        
+        # Compute pt = exp(-ce_loss)
+        pt = torch.exp(-ce_loss)
+        
+        # Compute focal loss: (1-pt)^gamma * ce_loss
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+        
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
+
+
 def build_model(cfg: Dict, input_dim: int, model_type: str) -> nn.Module:
     """
     Build model based on configuration and model type
@@ -156,8 +316,21 @@ def build_model(cfg: Dict, input_dim: int, model_type: str) -> nn.Module:
     num_classes = 8  # Fixed for MABE behavior classes
     
     if model_type.lower() == 'cnn':
-        model = BehaviorCNN(input_dim, num_classes, dropout)
-        logger.info(f"Built CNN model: input_dim={input_dim}, num_classes={num_classes}, dropout={dropout}")
+        use_attention = training_cfg.get('use_attention', True)
+        if use_attention:
+            # Use attention-enhanced CNN
+            num_heads = training_cfg.get('num_heads', 4)
+            model = BehaviorCNNWithAttention(
+                input_dim=input_dim,
+                num_classes=num_classes,
+                dropout=dropout,
+                num_heads=num_heads
+            )
+            logger.info(f"Built CNN with Attention: input_dim={input_dim}, num_classes={num_classes}, dropout={dropout}, num_heads={num_heads}")
+        else:
+            # Use original CNN
+            model = BehaviorCNN(input_dim, num_classes, dropout)
+            logger.info(f"Built CNN model: input_dim={input_dim}, num_classes={num_classes}, dropout={dropout}")
     elif model_type.lower() == 'lstm':
         hidden_dim = training_cfg.get('hidden_dim', 128)
         num_layers = training_cfg.get('num_layers', 2)
@@ -232,8 +405,54 @@ def train(model, train_loader, val_loader, cfg: Dict, resume_checkpoint: Optiona
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     
-    # Setup loss function
-    criterion = nn.CrossEntropyLoss()
+    # Setup loss function with focal loss and class weights
+    use_focal_loss = training_cfg.get('use_focal_loss', True)
+    use_class_balanced_loss = training_cfg.get('use_class_balanced_loss', False)
+    focal_gamma = training_cfg.get('focal_gamma', 2.0)
+    focal_alpha = training_cfg.get('focal_alpha', 1.0)
+    class_weight_power = training_cfg.get('class_weight_power', 1.0)
+    cb_loss_beta = training_cfg.get('cb_loss_beta', 0.9999)
+    
+    # Get class weights from preprocessing
+    class_weights = training_cfg.get('class_weights', None)
+    if class_weights is not None:
+        class_weights = torch.FloatTensor(class_weights).to(device)
+        
+        # Apply power transformation to class weights
+        if class_weight_power != 1.0:
+            class_weights = torch.pow(class_weights, class_weight_power)
+            # Normalize to maintain sum
+            class_weights = class_weights * (len(class_weights) / class_weights.sum())
+            logger.info(f"Applied class weight power transformation: {class_weight_power}")
+    
+    # Choose loss function
+    if use_class_balanced_loss:
+        # Calculate samples per class for class-balanced loss
+        samples_per_class = []
+        for i in range(8):  # 8 behavior classes
+            class_name = ['approach', 'attack', 'avoid', 'chase', 'chaseattack', 'submit', 'rear', 'shepherd'][i]
+            if class_weights is not None:
+                # Estimate sample count from class weights (inverse relationship)
+                weight = class_weights[i].item()
+                estimated_samples = max(1, int(1000 / weight))  # Rough estimate
+                samples_per_class.append(estimated_samples)
+            else:
+                samples_per_class.append(1000)  # Default estimate
+        
+        criterion = ClassBalancedFocalLoss(
+            samples_per_class=samples_per_class,
+            num_classes=8,
+            beta=cb_loss_beta,
+            gamma=focal_gamma,
+            alpha_weight=focal_alpha
+        )
+        logger.info(f"Using Class-Balanced Focal Loss with beta={cb_loss_beta}, gamma={focal_gamma}")
+    elif use_focal_loss:
+        criterion = FocalLoss(alpha=class_weights, gamma=focal_gamma, alpha_weight=focal_alpha)
+        logger.info(f"Using Focal Loss with gamma={focal_gamma}, alpha_weight={focal_alpha}")
+    else:
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
+        logger.info("Using CrossEntropyLoss with class weights")
     
     # Setup early stopping
     early_stopping = EarlyStopping(patience=patience, min_delta=0.001)
@@ -332,8 +551,22 @@ def train(model, train_loader, val_loader, cfg: Dict, resume_checkpoint: Optiona
             logger.info(f"Early stopping at epoch {epoch+1}")
             break
     
+    # Apply model calibration if enabled
+    temp_scaler = None
+    if training_cfg.get('use_calibration', True):
+        logger.info("Applying temperature scaling calibration...")
+        from .calibration import calibrate_model, save_calibration
+        
+        temp_scaler = calibrate_model(model, val_loader, device, cfg)
+        if temp_scaler is not None:
+            logger.info(f"Calibration complete. Temperature: {temp_scaler.get_temperature():.4f}")
+    
     # Save model
     model_path = _save_model(model, cfg, best_val_acc, epochs_trained)
+    
+    # Save calibration if available
+    if temp_scaler is not None:
+        save_calibration(temp_scaler, model_path)
     
     # Save checkpoint
     checkpoint_path = _save_checkpoint(model, optimizer, scheduler, epoch, cfg)
@@ -343,6 +576,7 @@ def train(model, train_loader, val_loader, cfg: Dict, resume_checkpoint: Optiona
     
     return {
         'model': model,
+        'temp_scaler': temp_scaler,
         'train_losses': train_losses,
         'val_losses': val_losses,
         'val_accuracies': val_accuracies,
