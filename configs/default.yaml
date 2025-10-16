@@ -1,0 +1,53 @@
+# MABE Pipeline Default Configuration
+# This file contains default settings for the MABE machine learning pipeline
+
+dataset:
+  path: C:/Users/MYPC/Documents/MABEDatasets/MABe-extracted
+  train_csv: train.csv
+  test_csv: test.csv
+  frame_labels_sample: data/sample_frame_labels.csv
+
+paths:
+  models_dir: outputs/models
+  outputs_dir: outputs
+  logs_dir: outputs/logs
+  submissions_dir: outputs/submissions
+  study_dir: outputs/studies
+  cnn_model_filename: cnn_enhanced_model.pth
+  lstm_model_filename: lstm_enhanced_model.pth
+
+training:
+  model_type: both  # 'cnn'|'lstm'|'both'
+  batch_size: 32
+  epochs: 30
+  learning_rate: 0.001
+  weight_decay: 0.0
+  val_fraction: 0.2
+  max_videos: 5
+  use_augmentation: true
+  augment_factor: 2.0
+  early_stopping_patience: 10
+  resume_checkpoint: null
+
+inference:
+  confidence_threshold: 0.4
+  ensemble_method: max  # 'average'|'max'
+  min_duration: 1
+  csv_columns: [video_id, agent_id, target_id, action, start_frame, stop_frame]
+
+optuna:
+  n_trials: 50
+  timeout: 3600
+  n_splits: 3
+  ci_mode: false
+
+device:
+  use_cuda: true
+  device_str: cuda:0
+
+logging:
+  level: INFO
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  file: outputs/logs/pipeline.log
+
+seed: 42

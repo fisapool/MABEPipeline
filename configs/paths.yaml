@@ -1,0 +1,19 @@
+# Path definitions and filenames for consistent model loading/saving
+# These values are used by both training and inference pipelines
+
+# Model filenames (must match what inference.py expects)
+cnn_model_filename: cnn_enhanced_model.pth
+lstm_model_filename: lstm_enhanced_model.pth
+
+# Preprocessing info pattern
+preprocessing_info_pattern: preprocessing_info_{timestamp}.json
+
+# Output directories
+submissions_dir: outputs/submissions
+models_dir: outputs/models
+logs_dir: outputs/logs
+studies_dir: outputs/studies
+
+# Data directories
+data_dir: data
+outputs_dir: outputs

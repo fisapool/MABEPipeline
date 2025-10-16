@@ -1,0 +1,28 @@
+# Example configuration overrides
+# Use this file as a template for custom configurations
+# Override specific values from default.yaml
+
+# Example: Quick training run for testing
+training:
+  epochs: 2
+  batch_size: 16
+  max_videos: 2
+
+# Example: CPU-only training
+device:
+  use_cuda: false
+  device_str: cpu
+
+# Example: Hyperparameter tuning with fewer trials
+optuna:
+  n_trials: 10
+  timeout: 1800
+
+# Example: Different model type
+training:
+  model_type: cnn  # Only train CNN model
+
+# Example: Different inference settings
+inference:
+  confidence_threshold: 0.3
+  ensemble_method: average
