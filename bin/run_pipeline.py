@@ -15,7 +15,7 @@ import logging
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from mabe.utils import load_config, get_logger, set_seed
+from mabe.utils import load_config, set_seed
 from mabe import (
     run_training,
     run_inference,
@@ -112,7 +112,21 @@ Examples:
 def setup_logging(cfg: dict, verbose: bool = False) -> logging.Logger:
     """Setup logging from configuration"""
     log_level = 'DEBUG' if verbose else cfg.get('logging', {}).get('level', 'INFO')
-    logger = get_logger('mabe_pipeline', log_level)
+    
+    # Create logger
+    logger = logging.getLogger('mabe_pipeline')
+    logger.setLevel(getattr(logging, log_level.upper()))
+    
+    # Remove existing handlers to avoid duplicates
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+    
+    # Create console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(getattr(logging, log_level.upper()))
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
     
     # Configure file logging if specified
     log_file = cfg.get('logging', {}).get('file')
@@ -271,24 +285,45 @@ def run_all_command(args, cfg: dict) -> int:
     
     try:
         # Step 1: Preprocessing
-        logger.info("Step 1/5: Data preprocessing")
-        if run_preprocess_command(args, cfg) != 0:
+        logger.info("Step 1/4: Data preprocessing")
+        # Create a minimal args namespace for preprocess so handlers won't crash if they expect attributes
+        preprocess_args = argparse.Namespace(
+            max_videos=getattr(args, 'max_videos', None), 
+            verbose=getattr(args, 'verbose', False)
+        )
+        if run_preprocess_command(preprocess_args, cfg) != 0:
             return 1
         
         # Step 2: Training
-        logger.info("Step 2/5: Model training")
-        if run_train_command(args, cfg) != 0:
+        logger.info("Step 2/4: Model training")
+        train_args = argparse.Namespace(
+            resume=getattr(args, 'resume', False),
+            checkpoint=getattr(args, 'checkpoint', None),
+            verbose=getattr(args, 'verbose', False),
+        )
+        if run_train_command(train_args, cfg) != 0:
             return 1
         
         # Step 3: Inference
-        logger.info("Step 3/5: Inference")
-        if run_infer_command(args, cfg) != 0:
+        logger.info("Step 3/4: Inference")
+        infer_args = argparse.Namespace(
+            confidence=getattr(args, 'confidence', None),
+            output=getattr(args, 'output', None),
+            val_videos=getattr(args, 'val_videos', None),
+            test_csv=getattr(args, 'test_csv', None),
+            verbose=getattr(args, 'verbose', False),
+        )
+        if run_infer_command(infer_args, cfg) != 0:
             return 1
         
         # Step 4: Evaluation (if ground truth available)
-        logger.info("Step 4/5: Evaluation")
+        logger.info("Step 4/4: Evaluation")
         # Note: Evaluation requires ground truth, so this might be skipped
-        # if run_evaluate_command(args, cfg) != 0:
+        # eval_args = argparse.Namespace(
+        #     predictions=getattr(args, 'predictions', None), 
+        #     verbose=getattr(args, 'verbose', False)
+        # )
+        # if run_evaluate_command(eval_args, cfg) != 0:
         #     return 1
         
         logger.info("Full pipeline completed successfully!")
